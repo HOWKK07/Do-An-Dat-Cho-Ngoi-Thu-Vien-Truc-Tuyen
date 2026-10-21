@@ -1,0 +1,10 @@
+build/
+target/
+lib/*.jar
+*.class
+.idea/
+*.iml
+nbproject/private/
+
+# Cấu hình MySQL riêng của từng máy (server tự tạo lại file mẫu nếu thiếu)
+db.properties

@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Mở dự án trong NetBeans / IntelliJ IDEA / Eclipse (Open Project → chọn thư mục này).
+     NetBeans tự tải thư viện MySQL Connector/J từ Internet ở lần build đầu tiên. -->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>library</groupId>
+    <artifactId>library-booking</artifactId>
+    <version>1.0</version>
+    <packaging>jar</packaging>
+    <name>Thu vien Fix Bug - He thong dat cho hoc truc tuyen</name>
+
+    <properties>
+        <maven.compiler.release>11</maven.compiler.release>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <!-- Lớp chạy mặc định khi bấm Run Project (F6); chạy client bằng Run File trên ClientMain.java -->
+        <exec.mainClass>library.server.ServerMain</exec.mainClass>
+    </properties>
+
+    <dependencies>
+        <!-- Driver JDBC kết nối MySQL / MariaDB -->
+        <dependency>
+            <groupId>com.mysql</groupId>
+            <artifactId>mysql-connector-j</artifactId>
+            <version>8.4.0</version>
+        </dependency>
+    </dependencies>
+</project>
