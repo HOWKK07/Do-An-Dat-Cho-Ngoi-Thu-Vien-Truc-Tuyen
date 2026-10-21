@@ -92,9 +92,14 @@ public class LibraryServer {
             t.start();
         }
 
+        // Dọn phiên: chỉ duyệt danh sách trong bộ nhớ, không truy vấn CSDL
         pools.scheduleRepeating("session-cleanup", sessions::expireSessions, 30, 30);
-        pools.scheduleRepeating("booking-timeouts", bookings::processTimeouts, 5, 30);
-        pools.scheduleRepeating("reputation-unlock", reputation::releaseExpiredLocks, 10, 300);
+        // Lượt đặt: hẹn giờ theo mốc ca học (10 lần/ngày) thay vì quét CSDL mỗi 30 giây
+        pools.scheduleAtMilestones("kiểm tra lượt đặt quá giờ check-in / hết ca", bookings::processTimeouts,
+                BookingService::nextDeadline);
+        // Khóa đặt chỗ tính theo ngày → chỉ cần mở khóa 1 lần ngay sau 0 giờ
+        pools.scheduleAtMilestones("mở khóa đặt chỗ hết hạn (điểm uy tín)", reputation::releaseExpiredLocks,
+                now -> now.toLocalDate().plusDays(1).atTime(0, 0, 5));
 
         Log.info("Server '%s' đang chạy tại cổng TCP %d", config.getServerName(), config.getPort());
         for (String ip : getLanAddresses()) {

@@ -83,6 +83,8 @@ public class ServerConnection {
     private volatile String serverBusyReason;
     private volatile long lastPingMillis = -1;
     private volatile boolean heartbeatStarted;
+    /** Lần cuối gửi gói tin tới server - đang thao tác thì không cần PING (tiết kiệm mạng / CPU server). */
+    private volatile long lastSentNanos = System.nanoTime();
     private final AtomicBoolean reconnecting = new AtomicBoolean(false);
 
     public ServerConnection(String host, int port) {
@@ -268,6 +270,7 @@ public class ServerConnection {
                 o.writeObject(request);
                 o.reset();
                 o.flush();
+                lastSentNanos = System.nanoTime();
             }
         } catch (IOException e) {
             pending.remove(id);
@@ -300,6 +303,10 @@ public class ServerConnection {
 
     private void heartbeat() {
         if (out == null) {
+            return;
+        }
+        // Vừa gửi yêu cầu khác trong nhịp này → kết nối vẫn "sống", bỏ qua PING
+        if (System.nanoTime() - lastSentNanos < TimeUnit.SECONDS.toNanos(Protocol.HEARTBEAT_SECONDS - 1)) {
             return;
         }
         long t0 = System.nanoTime();

@@ -553,6 +553,29 @@ public class BookingService {
         notifySeatChanges(changed);
     }
 
+    /**
+     * Mốc kế tiếp (sau {@code now}) cần gọi {@link #processTimeouts()}: 15 phút sau giờ bắt đầu mỗi ca (hết hạn
+     * check-in → tự hủy lượt chưa check-in) và giờ kết thúc mỗi ca (→ hoàn thành lượt đang sử dụng).
+     * Lịch ca cố định nên mỗi ngày chỉ có tối đa 10 mốc - thay cho việc quét CSDL 30 giây/lần (2.880 lần/ngày).
+     * Cộng thêm 1 giây để chắc chắn đã qua hạn khi chạy.
+     */
+    public static LocalDateTime nextDeadline(LocalDateTime now) {
+        LocalDateTime best = null;
+        for (int d = 0; d <= 1; d++) {
+            LocalDate date = now.toLocalDate().plusDays(d);
+            for (TimeSlot ts : TimeSlot.ALL) {
+                LocalDateTime expire = ts.startAt(date).plusMinutes(Protocol.CHECKIN_LATE_MINUTES).plusSeconds(1);
+                LocalDateTime end = ts.endAt(date).plusSeconds(1);
+                for (LocalDateTime t : new LocalDateTime[]{expire, end}) {
+                    if (t.isAfter(now) && (best == null || t.isBefore(best))) {
+                        best = t;
+                    }
+                }
+            }
+        }
+        return best;
+    }
+
     private static boolean isDue(Booking b, LocalDateTime now) {
         TimeSlot ts = b.getTimeSlot();
         if (ts == null) {

@@ -16,6 +16,7 @@ import javax.swing.JSplitPane;
 import javax.swing.JTable;
 import javax.swing.JTextArea;
 import javax.swing.SwingUtilities;
+import javax.swing.SwingWorker;
 import javax.swing.Timer;
 import javax.swing.UIManager;
 import javax.swing.WindowConstants;
@@ -27,12 +28,15 @@ import java.awt.FlowLayout;
 import java.awt.Font;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
 /** Cửa sổ giám sát server: phiên đăng nhập, thống kê luồng, nhật ký hoạt động. */
 public class ServerFrame extends JFrame {
     private static final int MAX_LOG_LINES = 3000;
+    /** Bảng phiên (trong bộ nhớ) cập nhật mỗi giây; thống kê cần truy vấn CSDL chỉ cập nhật mỗi 5 giây. */
+    private static final int STATS_EVERY_TICKS = 5;
 
     private final LibraryServer server;
     private final JTextArea logArea = new JTextArea();
@@ -41,6 +45,8 @@ public class ServerFrame extends JFrame {
             "Mã phiên", "Tài khoản", "Họ tên", "Vai trò", "Địa chỉ IP", "Trạng thái", "Đăng nhập lúc", "Hoạt động cuối"});
     private final DefaultTableModel statsModel = new ReadOnlyModel(new String[]{"Chỉ số", "Giá trị"});
     private final JTable sessionTable = new JTable(sessionModel);
+    private int tick;
+    private boolean statsLoading;
 
     public ServerFrame(LibraryServer server) {
         super("Máy chủ - " + library.common.Protocol.APP_NAME);
@@ -128,13 +134,17 @@ public class ServerFrame extends JFrame {
     }
 
     private void refresh() {
+        if (!isShowing() || (getExtendedState() & ICONIFIED) != 0) {
+            tick = 0; // cửa sổ đang ẩn / thu nhỏ → không tốn tài nguyên cập nhật; mở lại thì cập nhật ngay
+            return;
+        }
         if (!server.isRunning()) {
             infoLabel.setText("Server chưa chạy hoặc đã dừng");
             return;
         }
-        infoLabel.setText("Đang chạy  •  Cổng TCP " + server.getConfig().getPort()
-                + (server.getConfig().isDiscoveryEnabled() ? "  •  UDP tìm kiếm LAN " + server.getConfig().getDiscoveryPort() : "")
-                + "  •  Địa chỉ LAN: " + String.join(", ", LibraryServer.getLanAddresses()));
+        if (tick++ % STATS_EVERY_TICKS == 0 && !statsLoading) {
+            loadStatsInBackground();
+        }
 
         String selected = selectedSessionId();
         List<SessionInfo> sessions = server.getSessions().snapshot();
@@ -151,10 +161,39 @@ public class ServerFrame extends JFrame {
             }
         }
 
-        statsModel.setRowCount(0);
-        for (Map.Entry<String, String> e : server.getStats().entrySet()) {
-            statsModel.addRow(new Object[]{e.getKey(), e.getValue()});
-        }
+    }
+
+    /** Truy vấn CSDL và dò card mạng trên luồng nền để không làm đơ cửa sổ. */
+    private void loadStatsInBackground() {
+        statsLoading = true;
+        new SwingWorker<LinkedHashMap<String, String>, Void>() {
+            private List<String> lan;
+
+            @Override
+            protected LinkedHashMap<String, String> doInBackground() {
+                lan = LibraryServer.getLanAddresses();
+                return server.getStats();
+            }
+
+            @Override
+            protected void done() {
+                statsLoading = false;
+                try {
+                    LinkedHashMap<String, String> stats = get();
+                    infoLabel.setText("Đang chạy  •  Cổng TCP " + server.getConfig().getPort()
+                            + (server.getConfig().isDiscoveryEnabled()
+                            ? "  •  UDP tìm kiếm LAN " + server.getConfig().getDiscoveryPort() : "")
+                            + "  •  Địa chỉ LAN: " + String.join(", ", lan));
+                    statsModel.setRowCount(0);
+                    for (Map.Entry<String, String> e : stats.entrySet()) {
+                        statsModel.addRow(new Object[]{e.getKey(), e.getValue()});
+                    }
+                } catch (Exception e) {
+                    statsModel.setRowCount(0);
+                    statsModel.addRow(new Object[]{"Lỗi lấy thống kê", String.valueOf(e.getMessage())});
+                }
+            }
+        }.execute();
     }
 
     private String selectedSessionId() {

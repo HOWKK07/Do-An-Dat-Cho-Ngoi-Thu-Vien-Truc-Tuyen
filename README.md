@@ -133,9 +133,20 @@ announcements (id PK AUTO_INCREMENT, title, content, author, created_at)
 | `accept-loop` | Chỉ nhận kết nối mới rồi giao cho pool → không bao giờ bị nghẽn |
 | `client-handler-N` | `ThreadPoolExecutor` + `SynchronousQueue`: mỗi client 1 luồng, tối đa `--max-clients`, luồng rảnh 60 s tự giải phóng, vượt giới hạn → trả lời "máy chủ quá tải" |
 | Pool kết nối MySQL | `ArrayBlockingQueue` các kết nối JDBC dùng chung: luồng mượn → dùng → trả trong `finally`; tối đa `db.poolSize` kết nối, hết thì luồng **chờ** (tối đa 10 s) thay vì mở thêm; kết nối chết được kiểm tra `isValid` và thay mới |
-| `scheduler-N` | Tác vụ định kỳ: dọn phiên hết hạn (30 s), tự hủy lượt không check-in (30 s) |
+| `scheduler-N` | Tác vụ nền: dọn phiên hết hạn (30 s, chỉ duyệt bộ nhớ); **hẹn giờ theo mốc ca học** để tự hủy / hoàn thành lượt đặt (xem bên dưới); mở khóa điểm uy tín 1 lần lúc 0 giờ |
 | `event-broadcaster` | Đẩy sự kiện tới các client → người đặt chỗ nhận phản hồi ngay, không chờ gửi xong cho người khác |
 | `lan-discovery` | Trả lời gói UDP tìm server |
+
+**Tiết kiệm tài nguyên – hẹn giờ theo mốc thay vì quét liên tục:** lượt đặt không cần luồng hay bộ đếm giờ riêng. Vì lịch ca cố định, mọi lượt đặt chỉ đổi trạng thái tại **10 mốc mỗi ngày**: 15 phút sau giờ bắt đầu mỗi ca (chưa check-in → tự hủy, trừ điểm uy tín) và giờ kết thúc mỗi ca (→ hoàn thành). Luồng `scheduler` tính mốc kế tiếp (`BookingService.nextDeadline`), "ngủ" tới đúng mốc đó rồi xử lý **tất cả** lượt đến hạn bằng một truy vấn (`ServerThreadPools.scheduleAtMilestones`). Khi khởi động, server chạy bù một lần cho các lượt quá hạn trong lúc server tắt.
+
+| | Trước | Sau |
+|---|---|---|
+| Kiểm tra lượt đặt quá hạn / hết ca | quét CSDL 30 s/lần = 2.880 lần/ngày, trễ tới 30 s | 10 lần/ngày, đúng mốc (trễ ~1 s) |
+| Mở khóa điểm uy tín | 5 phút/lần = 288 lần/ngày | 1 lần lúc 0 giờ |
+| Cửa sổ giám sát server | truy vấn CSDL + dò card mạng mỗi giây trên luồng giao diện | thống kê 5 s/lần trên luồng nền; thu nhỏ / ẩn cửa sổ thì dừng cập nhật |
+| PING của client | 15 s/lần kể cả khi đang thao tác | chỉ gửi khi 15 s không có yêu cầu nào khác |
+
+Tab *Phiên & hệ thống* / cửa sổ server hiển thị dòng **"Hẹn giờ: …"** với thời điểm chạy kế tiếp; nhật ký server ghi mỗi lần chạy (ví dụ `Hẹn giờ: đã kiểm tra lượt đặt quá giờ check-in / hết ca - lần tiếp theo lúc 09:45:01`).
 
 **Chống đặt trùng chỗ khi nhiều luồng cùng đặt:** mỗi lượt đặt chạy trong một transaction (khóa dòng người dùng bằng `SELECT … FOR UPDATE`, kiểm tra giới hạn, rồi `INSERT`). Nếu nhiều luồng cùng vượt qua bước kiểm tra, `UNIQUE KEY uq_seat_live` của MySQL chỉ cho **một** lệnh INSERT thành công, các lệnh còn lại nhận lỗi trùng khóa và được báo "chỗ vừa được người khác đặt". MySQL báo deadlock → tự thử lại transaction (tối đa 3 lần).
 
@@ -144,7 +155,7 @@ announcements (id PK AUTO_INCREMENT, title, content, author, created_at)
 - **Mỗi tài khoản 1 phiên**: đăng nhập ở máy khác → máy cũ bị đăng xuất và được báo rõ lý do.
 - Hết hạn sau 30 phút **không thao tác** (gói PING giữ kết nối không tính là thao tác).
 - **Rớt mạng không mất phiên**: server giữ phiên 120 giây; client tự kết nối lại mỗi 3 giây và gửi `RESUME_SESSION` bằng token → tiếp tục làm việc không cần đăng nhập lại.
-- Phát hiện kết nối "chết" (half-open): client PING mỗi 15 s, server đóng kết nối nếu 45 s không nhận được gì.
+- Phát hiện kết nối "chết" (half-open): client PING khi 15 s không gửi gì (đang thao tác thì không cần PING), server đóng kết nối nếu 45 s không nhận được gì.
 - Quản trị viên chỉ thấy **mã phiên công khai** (S0001…), không bao giờ thấy token → không thể mạo danh.
 - Sai mật khẩu 5 lần → khóa đăng nhập tài khoản đó 60 giây.
 
