@@ -2,6 +2,7 @@ package library.common;
 
 public enum SeatType {
     SINGLE("Chỗ ngồi đơn", "Đơn"),
+    PAIR("Bàn đôi", "Đôi"),
     GROUP("Bàn học nhóm", "Nhóm"),
     COMPUTER("Máy tính", "PC"),
     ROOM("Phòng học riêng", "Phòng");

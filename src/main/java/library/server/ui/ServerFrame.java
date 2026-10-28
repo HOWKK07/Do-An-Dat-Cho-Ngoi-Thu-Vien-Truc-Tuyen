@@ -49,7 +49,7 @@ public class ServerFrame extends JFrame {
     private boolean statsLoading;
 
     public ServerFrame(LibraryServer server) {
-        super("Máy chủ - " + library.common.Protocol.APP_NAME);
+        super("Máy chủ " + server.getConfig().getServerName());
         this.server = server;
         try {
             UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
@@ -60,7 +60,7 @@ public class ServerFrame extends JFrame {
         JPanel header = new JPanel(new BorderLayout());
         header.setBackground(new Color(0x1E3A5F));
         header.setBorder(BorderFactory.createEmptyBorder(10, 14, 10, 14));
-        JLabel title = new JLabel("MÁY CHỦ " + library.common.Protocol.LIBRARY_NAME.toUpperCase());
+        JLabel title = new JLabel("MÁY CHỦ " + server.getConfig().getServerName().toUpperCase());
         title.setForeground(Color.WHITE);
         title.setFont(title.getFont().deriveFont(Font.BOLD, 18f));
         title.setBorder(BorderFactory.createEmptyBorder(4, 0, 2, 0)); // chừa chỗ cho dấu tiếng Việt chồng (Ố, Ộ...)

@@ -10,6 +10,7 @@ import library.common.Role;
 import library.common.Seat;
 import library.common.SeatMap;
 import library.common.SeatState;
+import library.common.SeatType;
 import library.common.SeatView;
 import library.common.TimeSlot;
 import library.common.UserInfo;
@@ -29,7 +30,10 @@ import java.sql.SQLException;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -46,8 +50,14 @@ import java.util.Set;
  * nếu nhiều luồng cùng vượt qua bước (1), chỉ một lệnh INSERT thành công, các lệnh còn lại bị MySQL từ chối.</p>
  */
 public class BookingService {
+    /** Thứ tự mở bàn cho ngồi ghép khi khu chỗ đơn đã kín: bàn đôi → bàn nhóm → phòng riêng. */
+    public static final List<SeatType> SHARE_ORDER =
+            Collections.unmodifiableList(Arrays.asList(SeatType.PAIR, SeatType.GROUP, SeatType.ROOM));
+
     private final Database db;
     private final EventBroadcaster events;
+    /** Đặt lẻ được xử lý tuần tự để 2 người cùng lúc không "mở" 2 bàn mới (quy tắc chỉ mở từng bàn). */
+    private final Object shareLock = new Object();
 
     public BookingService(Database db, EventBroadcaster events) {
         this.db = db;
@@ -69,31 +79,61 @@ public class BookingService {
             if (closedReason == null && standing != null) {
                 closedReason = reputationError(standing, level, date);
             }
-            Map<String, Booking> taken = new HashMap<>();
+            Map<String, List<Booking>> bySeat = new HashMap<>();
             int mine = 0;
             for (Booking b : BookingDao.liveOnDate(c, date)) {
                 if (b.getUsername().equals(viewer.getUsername()) && !b.isWalkIn()) {
                     mine++;
                 }
                 if (b.getSlot() == slot) {
-                    taken.put(b.getSeatId(), b);
+                    bySeat.computeIfAbsent(b.getSeatId(), k -> new ArrayList<>()).add(b);
                 }
             }
             SeatMap map = new SeatMap(date, slot);
-            map.getZones().addAll(ZoneDao.list(c));
-            for (Seat s : SeatDao.list(c)) {
+            List<Zone> zones = ZoneDao.list(c);
+            List<Seat> seats = SeatDao.list(c);
+            map.getZones().addAll(zones);
+            Sharing sharing = computeSharing(seats, zones, bySeat);
+            for (Seat s : seats) {
                 SeatView v = new SeatView(s);
-                Booking b = taken.get(s.getId());
-                if (b != null && b.getUsername().equals(viewer.getUsername()) && !b.isWalkIn()) {
+                List<Booking> onSeat = bySeat.getOrDefault(s.getId(), Collections.emptyList());
+                Booking whole = null;
+                Booking mineB = null;
+                List<Booking> sharers = new ArrayList<>();
+                for (Booking b : onSeat) {
+                    if (b.isSharedPlace()) {
+                        sharers.add(b);
+                    } else {
+                        whole = b;
+                    }
+                    if (b.getUsername().equals(viewer.getUsername()) && !b.isWalkIn()) {
+                        mineB = b;
+                    }
+                }
+                v.setSharedTaken(sharers.size());
+                v.setShareOpen(sharing.open.contains(s.getId()));
+                if (mineB != null) {
                     v.setState(SeatState.MINE);
-                    v.setBookingId(b.getId());
-                    v.setBookingStatus(b.getStatus());
-                } else if (b != null) {
+                    v.setBookingId(mineB.getId());
+                    v.setBookingStatus(mineB.getStatus());
+                    v.setMyPlace(mineB.getPlace());
+                } else if (whole != null) {
                     v.setState(SeatState.BOOKED);
-                    v.setBookingStatus(b.getStatus());
+                    v.setBookingStatus(whole.getStatus());
                     if (admin) { // chỉ quản trị viên mới thấy ai đang giữ chỗ
-                        v.setBookingId(b.getId());
-                        v.setBookedBy(holderInfo(b));
+                        v.setBookingId(whole.getId());
+                        v.setBookedBy(holderInfo(whole));
+                    }
+                } else if (!sharers.isEmpty()) {
+                    v.setState(sharers.size() >= s.getCapacity() ? SeatState.BOOKED : SeatState.PARTIAL);
+                    if (admin) {
+                        StringBuilder who = new StringBuilder();
+                        for (Booking b : sharers) {
+                            who.append(who.length() > 0 ? "; " : "").append("#").append(b.getPlace()).append(" ")
+                                    .append(holderInfo(b)).append(" - ").append(b.getId()).append(" (")
+                                    .append(b.getStatus().getLabel()).append(")");
+                        }
+                        v.setBookedBy(who.toString());
                     }
                 } else if (!s.isActive()) {
                     v.setState(SeatState.MAINTENANCE);
@@ -102,6 +142,7 @@ public class BookingService {
                 }
                 map.getSeats().add(v);
             }
+            map.setShareNote(sharing.describe());
             map.setOpen(closedReason == null);
             map.setClosedReason(closedReason);
             map.setMyBookingsThatDay(mine);
@@ -115,6 +156,22 @@ public class BookingService {
     // ------------------------------------------------------------------ Đặt chỗ
 
     public Booking book(UserInfo user, String rawSeatId, LocalDate date, int slot) {
+        return book(user, rawSeatId, date, slot, false);
+    }
+
+    /**
+     * @param onePlace true = đặt lẻ MỘT chỗ trên bàn đang mở ngồi ghép; false = đặt cả chỗ / cả bàn như thường
+     */
+    public Booking book(UserInfo user, String rawSeatId, LocalDate date, int slot, boolean onePlace) {
+        if (onePlace) {
+            synchronized (shareLock) {
+                return doBook(user, rawSeatId, date, slot, true);
+            }
+        }
+        return doBook(user, rawSeatId, date, slot, false);
+    }
+
+    private Booking doBook(UserInfo user, String rawSeatId, LocalDate date, int slot, boolean onePlace) {
         TimeSlot ts = requireSlot(date, slot);
         String seatId = rawSeatId == null ? "" : rawSeatId.trim().toUpperCase();
         String err = bookingWindowError(date, ts, LocalDateTime.now());
@@ -123,7 +180,7 @@ public class BookingService {
         }
 
         Booking created = db.tx(c -> {
-            Seat seat = SeatDao.find(c, seatId);
+            Seat seat = SeatDao.findForUpdate(c, seatId); // khóa chỗ: các lượt đặt vào cùng chỗ / bàn xử lý lần lượt
             if (seat == null) {
                 throw new ServiceException("Chỗ ngồi " + seatId + " không tồn tại.");
             }
@@ -151,12 +208,16 @@ public class BookingService {
                         + (level.getMaxPerDay() >= Protocol.MAX_BOOKINGS_PER_DAY ? "." : " (giới hạn của mức uy tín " + level.getLabel()
                         + ", " + standing.score + " điểm)."));
             }
-            if (BookingDao.isSeatTaken(c, seatId, date, slot)) {
+            int place = 0;
+            if (onePlace) {
+                place = pickSharedPlace(c, seat, date, slot);
+            } else if (BookingDao.isSeatTaken(c, seatId, date, slot)) {
                 throw seatTaken(seatId);
             }
 
             Zone zone = ZoneDao.find(c, seat.getZoneId());
             Booking b = new Booking();
+            b.setPlace(place);
             b.setUsername(user.getUsername());
             b.setFullName(user.getFullName());
             b.setStudentId(user.getStudentId());
@@ -216,6 +277,22 @@ public class BookingService {
      */
     public Booking bookByAdmin(UserInfo admin, String rawSeatId, LocalDate date, int slot, WalkInInfo guest,
                                boolean checkInNow) {
+        return bookByAdmin(admin, rawSeatId, date, slot, guest, checkInNow, false);
+    }
+
+    /** @param onePlace true = đặt lẻ một chỗ trên bàn đang mở ngồi ghép (theo cùng quy tắc với sinh viên) */
+    public Booking bookByAdmin(UserInfo admin, String rawSeatId, LocalDate date, int slot, WalkInInfo guest,
+                               boolean checkInNow, boolean onePlace) {
+        if (onePlace) {
+            synchronized (shareLock) {
+                return doBookByAdmin(admin, rawSeatId, date, slot, guest, checkInNow, true);
+            }
+        }
+        return doBookByAdmin(admin, rawSeatId, date, slot, guest, checkInNow, false);
+    }
+
+    private Booking doBookByAdmin(UserInfo admin, String rawSeatId, LocalDate date, int slot, WalkInInfo guest,
+                                  boolean checkInNow, boolean onePlace) {
         TimeSlot ts = requireSlot(date, slot);
         String seatId = rawSeatId == null ? "" : rawSeatId.trim().toUpperCase();
         LocalDateTime now = LocalDateTime.now().withNano(0);
@@ -239,18 +316,22 @@ public class BookingService {
         boolean checkIn = checkInNow || pastDeadline;
 
         Booking created = db.tx(c -> {
-            Seat seat = SeatDao.find(c, seatId);
+            Seat seat = SeatDao.findForUpdate(c, seatId);
             if (seat == null) {
                 throw new ServiceException("Chỗ ngồi " + seatId + " không tồn tại.");
             }
             if (!seat.isActive()) {
                 throw new ServiceException("Chỗ " + seatId + " đang tạm ngừng phục vụ (bảo trì).");
             }
-            if (BookingDao.isSeatTaken(c, seatId, date, slot)) {
+            int place = 0;
+            if (onePlace) {
+                place = pickSharedPlace(c, seat, date, slot);
+            } else if (BookingDao.isSeatTaken(c, seatId, date, slot)) {
                 throw seatTaken(seatId);
             }
             Zone zone = ZoneDao.find(c, seat.getZoneId());
             Booking b = new Booking();
+            b.setPlace(place);
             b.setUsername(admin.getUsername()); // tài khoản tạo lượt đặt (FK tới bảng users)
             if (guest != null) {
                 b.setWalkIn(true);
@@ -355,6 +436,134 @@ public class BookingService {
     }
 
     /** Mô tả người giữ chỗ cho quản trị viên xem trên sơ đồ. */
+    // ------------------------------------------------------------------ Ngồi ghép (đặt lẻ từng chỗ)
+
+    /** Các bàn đang mở cho đặt lẻ trong một ca. */
+    static final class Sharing {
+        final Set<String> open = new LinkedHashSet<>();
+        boolean singlesFull;
+
+        String describe() {
+            if (!open.isEmpty()) {
+                return (singlesFull ? "Khu chỗ đơn đã kín - " : "") + "bàn " + String.join(", ", open)
+                        + " đang mở cho đặt lẻ từng chỗ (ngồi ghép). Bàn đủ người thì mở bàn tiếp theo.";
+            }
+            return singlesFull ? "Khu chỗ đơn đã kín và không còn bàn trống để mở ngồi ghép." : null;
+        }
+    }
+
+    static boolean isSharable(Seat s) {
+        return s.isActive() && s.getCapacity() >= 2 && SHARE_ORDER.contains(s.getType());
+    }
+
+    /**
+     * QUY TẮC NGỒI GHÉP của một ca (tính lại mỗi lần, không cần lưu trạng thái "đang mở"):
+     * <ol>
+     *   <li>Bàn đã có người đặt lẻ mà còn chỗ → vẫn mở để lấp cho đủ bàn.</li>
+     *   <li>Nếu không có bàn nào như vậy và khu chỗ đơn (mọi chỗ đơn đang phục vụ) đã kín → mở THÊM MỘT bàn trống
+     *       đầu tiên theo thứ tự {@link #SHARE_ORDER} (bàn đôi → bàn nhóm → phòng riêng), trong cùng loại theo thứ tự
+     *       khu rồi mã chỗ.</li>
+     * </ol>
+     * Vì vậy bàn đang mở đủ người thì lần đặt sau sẽ thấy bàn kế tiếp được mở - mở lần lượt từng bàn.
+     */
+    static Sharing computeSharing(List<Seat> seats, List<Zone> zones, Map<String, List<Booking>> bySeat) {
+        Sharing sh = new Sharing();
+        int singles = 0;
+        int singlesTaken = 0;
+        for (Seat s : seats) {
+            if (s.isActive() && s.getType() == SeatType.SINGLE) {
+                singles++;
+                if (!bySeat.getOrDefault(s.getId(), Collections.emptyList()).isEmpty()) {
+                    singlesTaken++;
+                }
+            }
+        }
+        sh.singlesFull = singles > 0 && singlesTaken >= singles;
+
+        Map<String, Integer> zoneOrder = new HashMap<>();
+        for (int i = 0; i < zones.size(); i++) {
+            zoneOrder.put(zones.get(i).getId(), i);
+        }
+        List<Seat> tables = new ArrayList<>();
+        for (Seat s : seats) {
+            if (isSharable(s)) {
+                tables.add(s);
+            }
+        }
+        tables.sort(Comparator.comparingInt((Seat s) -> SHARE_ORDER.indexOf(s.getType()))
+                .thenComparingInt(s -> zoneOrder.getOrDefault(s.getZoneId(), Integer.MAX_VALUE))
+                .thenComparing(Seat::getId));
+
+        for (Seat s : tables) {
+            List<Booking> onSeat = bySeat.getOrDefault(s.getId(), Collections.emptyList());
+            boolean whole = onSeat.stream().anyMatch(b -> !b.isSharedPlace());
+            long sharers = onSeat.stream().filter(Booking::isSharedPlace).count();
+            if (!whole && sharers > 0 && sharers < s.getCapacity()) {
+                sh.open.add(s.getId());
+            }
+        }
+        if (sh.open.isEmpty() && sh.singlesFull) {
+            for (Seat s : tables) {
+                if (bySeat.getOrDefault(s.getId(), Collections.emptyList()).isEmpty()) {
+                    sh.open.add(s.getId());
+                    break;
+                }
+            }
+        }
+        return sh;
+    }
+
+    private static Sharing loadSharing(Connection c, LocalDate date, int slot) throws SQLException {
+        Map<String, List<Booking>> bySeat = new HashMap<>();
+        for (Booking b : BookingDao.liveOnDate(c, date)) {
+            if (b.getSlot() == slot) {
+                bySeat.computeIfAbsent(b.getSeatId(), k -> new ArrayList<>()).add(b);
+            }
+        }
+        return computeSharing(SeatDao.list(c), ZoneDao.list(c), bySeat);
+    }
+
+    /** Kiểm tra bàn đang mở ngồi ghép và chọn vị trí trống nhỏ nhất (1, 2, ...) trên bàn. */
+    private static int pickSharedPlace(Connection c, Seat seat, LocalDate date, int slot) throws SQLException {
+        if (!SHARE_ORDER.contains(seat.getType()) || seat.getCapacity() < 2) {
+            throw new ServiceException("Chỗ " + seat.getId() + " là chỗ 1 người, không đặt lẻ được.");
+        }
+        Sharing sh = loadSharing(c, date, slot);
+        List<Booking> onSeat = BookingDao.liveOfSeat(c, seat.getId(), date, slot);
+        if (!sh.open.contains(seat.getId())) {
+            boolean wholeBooked = onSeat.stream().anyMatch(b -> !b.isSharedPlace());
+            if (!onSeat.isEmpty() && !wholeBooked) { // bàn ghép vừa đủ người
+                throw new ServiceException("Bàn " + seat.getId() + " vừa đủ người ngồi ghép."
+                        + (sh.open.isEmpty() ? "" : " Bàn đang mở tiếp theo: " + String.join(", ", sh.open) + "."));
+            }
+            if (wholeBooked) {
+                throw seatTaken(seat.getId());
+            }
+            if (!sh.open.isEmpty()) {
+                throw new ServiceException("Bàn " + seat.getId() + " chưa mở đặt lẻ. Thư viện mở lần lượt từng bàn - "
+                        + "hiện đang mở bàn " + String.join(", ", sh.open) + ".");
+            }
+            throw new ServiceException(sh.singlesFull ? "Không còn bàn nào mở cho ngồi ghép trong ca này."
+                    : "Chỉ mở đặt lẻ từng chỗ (ngồi ghép) khi khu chỗ đơn đã kín. Hiện vẫn còn chỗ đơn trống - "
+                    + "vui lòng chọn chỗ đơn, hoặc đặt cả bàn.");
+        }
+        boolean[] used = new boolean[seat.getCapacity() + 1];
+        for (Booking b : onSeat) {
+            if (!b.isSharedPlace()) {
+                throw seatTaken(seat.getId());
+            }
+            if (b.getPlace() < used.length) {
+                used[b.getPlace()] = true;
+            }
+        }
+        for (int p = 1; p < used.length; p++) {
+            if (!used[p]) {
+                return p;
+            }
+        }
+        throw new ServiceException("Bàn " + seat.getId() + " vừa đủ người. Vui lòng chọn bàn đang mở tiếp theo.");
+    }
+
     private static String holderInfo(Booking b) {
         if (!b.isWalkIn()) {
             return b.getFullName() + " (" + b.getUsername() + ")";

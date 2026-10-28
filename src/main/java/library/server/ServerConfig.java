@@ -2,7 +2,6 @@ package library.server;
 
 import library.common.Protocol;
 
-import java.net.InetAddress;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 
@@ -59,14 +58,8 @@ public class ServerConfig {
                     throw new IllegalArgumentException("Tham số không hợp lệ: " + a);
             }
         }
-        if (c.serverName == null) {
-            String host;
-            try {
-                host = InetAddress.getLocalHost().getHostName();
-            } catch (Exception e) {
-                host = "server";
-            }
-            c.serverName = Protocol.LIBRARY_NAME + " (" + host + ")";
+        if (c.serverName == null || c.serverName.trim().isEmpty()) {
+            c.serverName = Protocol.SERVER_NAME;
         }
         return c;
     }
@@ -80,7 +73,7 @@ public class ServerConfig {
                 + "  --session-timeout N   Phút không thao tác thì hết phiên (mặc định 30)\n"
                 + "  --reconnect-grace N   Giây giữ phiên khi client rớt mạng (mặc định 120)\n"
                 + "  --db-config FILE      File cấu hình MySQL (mặc định ./db.properties)\n"
-                + "  --name TÊN            Tên server hiển thị khi client tìm trong LAN\n"
+                + "  --name TÊN            Tên server hiển thị khi client tìm trong LAN (mặc định: " + Protocol.SERVER_NAME + ")\n"
                 + "  --nogui               Chạy dạng dòng lệnh, không mở cửa sổ giám sát\n";
     }
 

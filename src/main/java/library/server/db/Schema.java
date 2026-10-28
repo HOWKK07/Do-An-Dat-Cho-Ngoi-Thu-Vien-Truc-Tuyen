@@ -13,8 +13,10 @@ import java.sql.Statement;
  * nội dung giống file database/thuvien_fixbug.sql.
  *
  * <p>Điểm đáng chú ý: cột {@code live} của bảng bookings = 1 khi lượt đặt còn hiệu lực và = NULL khi đã kết thúc.
- * MySQL cho phép nhiều giá trị NULL trong UNIQUE KEY, nên khóa {@code uq_seat_live(seat_id, booking_date, slot, live)}
- * đảm bảo ở MỨC CSDL: một chỗ trong một ca chỉ có tối đa 1 lượt còn hiệu lực - kể cả khi nhiều luồng cùng ghi.</p>
+ * MySQL cho phép nhiều giá trị NULL trong UNIQUE KEY, nên khóa
+ * {@code uq_seat_place_live(seat_id, booking_date, slot, place, live)} đảm bảo ở MỨC CSDL: mỗi vị trí của một chỗ
+ * trong một ca chỉ có tối đa 1 lượt còn hiệu lực - kể cả khi nhiều luồng cùng ghi. {@code place} = 0 là đặt cả
+ * chỗ / bàn; 1, 2... là từng chỗ khi ngồi ghép (xem BookingService).</p>
  *
  * <p>Cột {@code owner_live} = 1 chỉ với lượt sinh viên TỰ đặt còn hiệu lực; khóa
  * {@code uq_owner_live(username, booking_date, slot, owner_live)} bảo đảm mỗi sinh viên giữ 1 chỗ mỗi ca.
@@ -35,7 +37,10 @@ public final class Schema {
                     + "  created_at    DATETIME     NOT NULL,\n"
                     + "  reputation    INT          NOT NULL DEFAULT " + Reputation.START + ",\n"
                     + "  locked_until  DATE         NULL,\n"
-                    + "  UNIQUE KEY uq_users_student_id (student_id)\n"
+                    + "  email         VARCHAR(120) NULL,\n"
+                    + "  google_sub    VARCHAR(64)  NULL,\n"
+                    + "  UNIQUE KEY uq_users_student_id (student_id),\n"
+                    + "  UNIQUE KEY uq_users_google (google_sub)\n"
                     + ")" + OPTIONS,
 
             "CREATE TABLE IF NOT EXISTS zones (\n"
@@ -72,12 +77,13 @@ public final class Schema {
                     + "  walk_in       BOOLEAN      NOT NULL DEFAULT FALSE,\n"
                     + "  phone         VARCHAR(15)  NULL,\n"
                     + "  guest_note    VARCHAR(200) NULL,\n"
+                    + "  place         INT          NOT NULL DEFAULT 0,\n"
                     + "  created_at    DATETIME     NOT NULL,\n"
                     + "  checked_in_at DATETIME     NULL,\n"
                     + "  finished_at   DATETIME     NULL,\n"
                     + "  note          VARCHAR(255) NULL,\n"
                     + "  CONSTRAINT fk_bookings_user FOREIGN KEY (username) REFERENCES users(username),\n"
-                    + "  UNIQUE KEY uq_seat_live (seat_id, booking_date, slot, live),\n"
+                    + "  UNIQUE KEY uq_seat_place_live (seat_id, booking_date, slot, place, live),\n"
                     + "  UNIQUE KEY uq_owner_live (username, booking_date, slot, owner_live),\n"
                     + "  KEY idx_bookings_date (booking_date, slot),\n"
                     + "  KEY idx_bookings_live (live, booking_date)\n"
@@ -101,6 +107,13 @@ public final class Schema {
                     + "  content    TEXT         NOT NULL,\n"
                     + "  author     VARCHAR(80)  NOT NULL,\n"
                     + "  created_at DATETIME     NOT NULL\n"
+                    + ")" + OPTIONS,
+
+            // Đánh dấu các bản cập nhật dữ liệu đã chạy (mỗi bản chỉ chạy một lần)
+            "CREATE TABLE IF NOT EXISTS app_meta (\n"
+                    + "  meta_key   VARCHAR(50)  NOT NULL PRIMARY KEY,\n"
+                    + "  meta_value VARCHAR(200) NULL,\n"
+                    + "  updated_at DATETIME     NOT NULL\n"
                     + ")" + OPTIONS
     };
 
@@ -125,6 +138,37 @@ public final class Schema {
     static boolean migrate(Connection c) throws SQLException {
         boolean changed = false;
         try (Statement st = c.createStatement()) {
+            // v6: đăng nhập bằng Google (google_sub = mã định danh cố định của tài khoản Google)
+            if (!hasColumn(c, "users", "email")) {
+                st.executeUpdate("ALTER TABLE users ADD COLUMN email VARCHAR(120) NULL");
+                changed = true;
+            }
+            if (!hasColumn(c, "users", "google_sub")) {
+                st.executeUpdate("ALTER TABLE users ADD COLUMN google_sub VARCHAR(64) NULL");
+                changed = true;
+            }
+            if (!hasIndex(c, "users", "uq_users_google")) {
+                st.executeUpdate("ALTER TABLE users ADD UNIQUE KEY uq_users_google (google_sub)");
+                changed = true;
+            }
+            // v5: ngồi ghép - nhiều người đặt lẻ từng chỗ trên cùng một bàn (place = 1, 2...; 0 = cả bàn)
+            if (!hasColumn(c, "bookings", "place")) {
+                st.executeUpdate("ALTER TABLE bookings ADD COLUMN place INT NOT NULL DEFAULT 0");
+                changed = true;
+            }
+            if (!hasIndex(c, "bookings", "uq_seat_place_live")) {
+                st.executeUpdate("ALTER TABLE bookings ADD UNIQUE KEY uq_seat_place_live "
+                        + "(seat_id, booking_date, slot, place, live)");
+                changed = true;
+            }
+            if (hasIndex(c, "bookings", "uq_seat_live")) {
+                try {
+                    st.executeUpdate("ALTER TABLE bookings DROP INDEX uq_seat_live");
+                } catch (SQLException e) {
+                    st.executeUpdate("ALTER TABLE bookings DROP CONSTRAINT uq_seat_live");
+                }
+                changed = true;
+            }
             // v3: điểm uy tín
             if (!hasColumn(c, "users", "reputation")) {
                 st.executeUpdate("ALTER TABLE users ADD COLUMN reputation INT NOT NULL DEFAULT " + Reputation.START);

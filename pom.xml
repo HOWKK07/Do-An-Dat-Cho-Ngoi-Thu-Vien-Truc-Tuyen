@@ -10,7 +10,7 @@
     <artifactId>library-booking</artifactId>
     <version>1.0</version>
     <packaging>jar</packaging>
-    <name>Thu vien Fix Bug - He thong dat cho hoc truc tuyen</name>
+    <name>Thu vien Fixbug - He thong dat cho hoc truc tuyen</name>
 
     <properties>
         <maven.compiler.release>11</maven.compiler.release>

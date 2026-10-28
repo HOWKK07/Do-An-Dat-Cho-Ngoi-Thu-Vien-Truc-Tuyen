@@ -4,6 +4,8 @@ package library.common;
 public enum SeatState {
     AVAILABLE("Còn trống"),
     BOOKED("Đã có người đặt"),
+    /** Bàn đang có người ngồi ghép và còn chỗ trống để đặt lẻ. */
+    PARTIAL("Còn chỗ ngồi ghép"),
     MINE("Chỗ của bạn"),
     MAINTENANCE("Đang bảo trì");
 

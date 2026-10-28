@@ -7,6 +7,8 @@ package library.common;
 public enum Command {
     // ----- Không cần đăng nhập -----
     PING, LOGIN, REGISTER, RESUME_SESSION,
+    /** Đăng nhập bằng Google: lấy Client ID / đổi mã xác thực / hoàn tất (tạo mới hoặc liên kết tài khoản). */
+    GOOGLE_CONFIG, GOOGLE_LOGIN, GOOGLE_COMPLETE,
 
     // ----- Người dùng đã đăng nhập -----
     LOGOUT,
@@ -45,7 +47,8 @@ public enum Command {
     ADMIN_GET_STATS;
 
     public boolean requiresLogin() {
-        return this != PING && this != LOGIN && this != REGISTER && this != RESUME_SESSION;
+        return this != PING && this != LOGIN && this != REGISTER && this != RESUME_SESSION
+                && this != GOOGLE_CONFIG && this != GOOGLE_LOGIN && this != GOOGLE_COMPLETE;
     }
 
     public boolean isAdminOnly() {

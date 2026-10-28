@@ -36,6 +36,15 @@ public final class AdminBookingDialog {
 
     /** @return yêu cầu ADMIN_BOOK_SEAT cần gửi, hoặc null nếu người dùng bấm Hủy */
     public static Message show(Component parent, Seat seat, String place, LocalDate date, TimeSlot slot) {
+        return show(parent, seat, place, date, slot, false, false);
+    }
+
+    /**
+     * @param shareOpen bàn đang mở ngồi ghép → cho chọn "chỉ đặt 1 chỗ"
+     * @param placeOnly bàn đã có người ngồi ghép → bắt buộc đặt 1 chỗ
+     */
+    public static Message show(Component parent, Seat seat, String place, LocalDate date, TimeSlot slot,
+                               boolean shareOpen, boolean placeOnly) {
         JRadioButton forGuest = new JRadioButton("Đặt hộ sinh viên không có tài khoản (đặt trực tiếp tại quầy)", true);
         JRadioButton forSelf = new JRadioButton("Đặt cho chính tôi (quản trị viên)");
         ButtonGroup group = new ButtonGroup();
@@ -51,6 +60,8 @@ public final class AdminBookingDialog {
         boolean today = date.equals(LocalDate.now());
         // Chưa đến ca (trước giờ mở check-in) thì không cho check-in
         boolean canCheckIn = slot.isCheckInStarted(date, LocalDateTime.now());
+        JCheckBox onePlace = new JCheckBox("Chỉ đặt 1 chỗ (ngồi ghép với người khác)", placeOnly);
+        onePlace.setEnabled(shareOpen && !placeOnly);
         JCheckBox checkIn = new JCheckBox("Sinh viên đang có mặt - check-in luôn", canCheckIn);
         checkIn.setEnabled(canCheckIn);
 
@@ -84,6 +95,9 @@ public final class AdminBookingDialog {
         panel.add(UiKit.label("<html><b>Chỗ " + UiKit.html(place) + "</b><br>" + Fmt.dayLabel(date) + " • "
                 + slot.getLabel() + "<br>" + seat.getType().getLabel() + " • " + seat.getCapacity() + " người</html>",
                 Font.PLAIN, 13f, UiKit.PRIMARY), p);
+        if (shareOpen || placeOnly) {
+            panel.add(onePlace, p);
+        }
         panel.add(forGuest, p);
         panel.add(forSelf, p);
         panel.add(info, p);
@@ -110,7 +124,8 @@ public final class AdminBookingDialog {
             }
             Message req = Message.request(Command.ADMIN_BOOK_SEAT)
                     .put("seatId", seat.getId()).put("date", date).put("slot", slot.getIndex())
-                    .put("walkIn", guest).put("checkInNow", checkIn.isSelected());
+                    .put("walkIn", guest).put("checkInNow", checkIn.isSelected())
+                    .put("onePlace", onePlace.isSelected());
             if (guest) {
                 req.put("guestName", name.getText().trim())
                         .put("guestStudentId", studentId.getText().trim())

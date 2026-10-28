@@ -27,6 +27,8 @@ public class Booking implements Serializable {
     private String phone;
     /** Ghi chú thông tin sinh viên do quản trị viên nhập. */
     private String guestNote;
+    /** Vị trí ngồi ghép trên bàn (1, 2, ...); 0 = đặt cả bàn / chỗ ngồi đơn. */
+    private int place;
     /** Thông tin thay đổi điểm uy tín sau thao tác (chỉ để hiển thị, không lưu CSDL). VD: "+5 điểm uy tín (còn 100)". */
     private String reputationNote;
 
@@ -49,6 +51,7 @@ public class Booking implements Serializable {
         b.walkIn = walkIn;
         b.phone = phone;
         b.guestNote = guestNote;
+        b.place = place;
         b.reputationNote = reputationNote;
         return b;
     }
@@ -60,7 +63,24 @@ public class Booking implements Serializable {
     /** Mô tả ngắn gọn: "chỗ A05, Thứ 4, 21/10/2026, Ca 2 (09:30 - 12:00)". */
     public String describe() {
         TimeSlot ts = getTimeSlot();
-        return "chỗ " + seatId + ", " + Fmt.dayLabel(date) + ", " + (ts != null ? ts.getLabel() : "ca " + slot);
+        return "chỗ " + getSeatLabel() + ", " + Fmt.dayLabel(date) + ", " + (ts != null ? ts.getLabel() : "ca " + slot);
+    }
+
+    /** Mã chỗ để hiển thị: "B03", hoặc "B03 (ghép #1)" khi đặt lẻ một chỗ trên bàn. */
+    public String getSeatLabel() {
+        return place > 0 ? seatId + " (ghép #" + place + ")" : seatId;
+    }
+
+    public int getPlace() {
+        return place;
+    }
+
+    public void setPlace(int place) {
+        this.place = place;
+    }
+
+    public boolean isSharedPlace() {
+        return place > 0;
     }
 
     /** Tên người giữ chỗ để hiển thị: "Nguyễn Văn A (đặt tại quầy)". */

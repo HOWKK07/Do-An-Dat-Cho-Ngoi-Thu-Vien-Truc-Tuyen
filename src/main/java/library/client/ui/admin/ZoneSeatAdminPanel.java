@@ -197,6 +197,7 @@ public class ZoneSeatAdminPanel extends JPanel {
         JComboBox<SeatType> type = new JComboBox<>(SeatType.values());
         type.setSelectedItem(isNew ? SeatType.SINGLE : existing.getType());
         JSpinner capacity = new JSpinner(new SpinnerNumberModel(isNew ? 1 : existing.getCapacity(), 1, 30, 1));
+        suggestCapacity(type, capacity);
         JCheckBox outlet = new JCheckBox("Có ổ cắm điện", !isNew && existing.isHasOutlet());
         if (!UiKit.form(this, isNew ? "Thêm chỗ ngồi" : "Sửa chỗ " + existing.getId(),
                 "Mã chỗ (VD: A21)", id, "Khu vực", zone, "Loại", type, "Sức chứa (người)", capacity, "", outlet)) {
@@ -221,6 +222,7 @@ public class ZoneSeatAdminPanel extends JPanel {
         JSpinner count = new JSpinner(new SpinnerNumberModel(5, 1, 50, 1));
         JComboBox<SeatType> type = new JComboBox<>(SeatType.values());
         JSpinner capacity = new JSpinner(new SpinnerNumberModel(1, 1, 30, 1));
+        suggestCapacity(type, capacity);
         JCheckBox outlet = new JCheckBox("Có ổ cắm điện", true);
         if (!UiKit.form(this, "Thêm nhiều chỗ vào " + current.getDisplayName(),
                 "Tiền tố mã", prefix, "Số lượng", count, "Loại", type, "Sức chứa", capacity, "", outlet)) {
@@ -232,6 +234,16 @@ public class ZoneSeatAdminPanel extends JPanel {
                 .put("capacity", (Integer) capacity.getValue()).put("outlet", outlet.isSelected()), r -> {
             Toast.show(this, r.getText(), UiKit.SUCCESS);
             ctx.reloadZones();
+        });
+    }
+
+    /** Đổi loại chỗ thì gợi ý sức chứa thường gặp (đơn / máy tính: 1, bàn đôi: 2, nhóm: 4, phòng: 8). */
+    private static void suggestCapacity(JComboBox<SeatType> type, JSpinner capacity) {
+        type.addActionListener(e -> {
+            SeatType t = (SeatType) type.getSelectedItem();
+            if (t != null) {
+                capacity.setValue(t == SeatType.PAIR ? 2 : t == SeatType.GROUP ? 4 : t == SeatType.ROOM ? 8 : 1);
+            }
         });
     }
 

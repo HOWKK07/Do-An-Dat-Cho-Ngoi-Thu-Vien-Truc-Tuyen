@@ -15,6 +15,8 @@ public class SeatMap implements Serializable {
     /** Ca này còn cho phép đặt chỗ hay không. */
     private boolean open;
     private String closedReason;
+    /** Thông báo chế độ ngồi ghép của ca này (null nếu không có bàn nào mở đặt lẻ). */
+    private String shareNote;
     /** Số lượt người xem đã đặt trong ngày này. */
     private int myBookingsThatDay;
     /** Điểm uy tín của người xem (sinh viên) và quyền đặt chỗ tương ứng. */
@@ -57,6 +59,14 @@ public class SeatMap implements Serializable {
 
     public void setClosedReason(String closedReason) {
         this.closedReason = closedReason;
+    }
+
+    public String getShareNote() {
+        return shareNote;
+    }
+
+    public void setShareNote(String shareNote) {
+        this.shareNote = shareNote;
     }
 
     public int getMyBookingsThatDay() {

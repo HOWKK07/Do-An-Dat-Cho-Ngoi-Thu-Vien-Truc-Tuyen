@@ -1,5 +1,5 @@
 -- =====================================================================
---  CSDL cho "Thư viện Fix Bug - Đặt chỗ học trực tuyến" - Nhóm Fix Bug
+--  CSDL cho "Thư viện Fixbug - Đặt chỗ học trực tuyến" - Nhóm Fix Bug
 --  Dùng cho MySQL 5.7+ / 8.x hoặc MariaDB 10.3+ (XAMPP).
 --  Cách dùng: phpMyAdmin → Import file này, hoặc MySQL Workbench → File → Run SQL Script.
 --  (Không bắt buộc: server tự tạo database, bảng và dữ liệu mẫu khi chạy lần đầu.)
@@ -21,7 +21,10 @@ CREATE TABLE IF NOT EXISTS users (
   created_at    DATETIME     NOT NULL,
   reputation    INT          NOT NULL DEFAULT 80,
   locked_until  DATE         NULL,
-  UNIQUE KEY uq_users_student_id (student_id)
+  email         VARCHAR(120) NULL,
+  google_sub    VARCHAR(64)  NULL,
+  UNIQUE KEY uq_users_student_id (student_id),
+  UNIQUE KEY uq_users_google (google_sub)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS zones (
@@ -58,12 +61,13 @@ CREATE TABLE IF NOT EXISTS bookings (
   walk_in       BOOLEAN      NOT NULL DEFAULT FALSE,
   phone         VARCHAR(15)  NULL,
   guest_note    VARCHAR(200) NULL,
+  place         INT          NOT NULL DEFAULT 0,
   created_at    DATETIME     NOT NULL,
   checked_in_at DATETIME     NULL,
   finished_at   DATETIME     NULL,
   note          VARCHAR(255) NULL,
   CONSTRAINT fk_bookings_user FOREIGN KEY (username) REFERENCES users(username),
-  UNIQUE KEY uq_seat_live (seat_id, booking_date, slot, live),
+  UNIQUE KEY uq_seat_place_live (seat_id, booking_date, slot, place, live),
   UNIQUE KEY uq_owner_live (username, booking_date, slot, owner_live),
   KEY idx_bookings_date (booking_date, slot),
   KEY idx_bookings_live (live, booking_date)
@@ -89,19 +93,26 @@ CREATE TABLE IF NOT EXISTS announcements (
   created_at DATETIME     NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+CREATE TABLE IF NOT EXISTS app_meta (
+  meta_key   VARCHAR(50)  NOT NULL PRIMARY KEY,
+  meta_value VARCHAR(200) NULL,
+  updated_at DATETIME     NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 -- ---------------------------------------------------------------- Tài khoản
 INSERT IGNORE INTO users (username, full_name, student_id, role, salt, password_hash, created_at) VALUES
-  ('admin', 'Quản trị viên Thư viện Fix Bug', NULL, 'ADMIN', 'z4PU3H3NHQLlf7RQqvErwA==', 'l0mypUKOrpLuU3sDLySlOpiLY+Ucrb5AMQ8Xi16ue5Q=', NOW()),
-  ('thinh', 'Nguyễn Văn Thịnh', '2280603107', 'STUDENT', '4nuvkdpQw/Iac2UNwSuJ2w==', 'bFyo1iHofUIeMlNh6zqR3dVYZDRFA/Ns8umLqLOADps=', NOW()),
-  ('truong', 'Nguyễn Đan Trường', '2280603486', 'STUDENT', 'tou5eynsJAp/40E/pkPssQ==', '8hzVSyZayGxbHIwSSfwpBGS52XHQbm8l7sU7T9OnxVc=', NOW()),
-  ('bao', 'Chu Nguyễn Gia Bảo', '2380600118', 'STUDENT', 'rhHmPQrcuV7CMT3T5gUU4g==', 'gJbemb7tjQ4KzcjrdXJqQSsOoLrX1pV1zee6CH3drTg=', NOW());
+  ('admin', 'Quản trị viên Thư viện Fixbug', NULL, 'ADMIN', 'c4wHhUy+HqjXkAu8cEI7lw==', 'b3bKzb2FQWLa8uqyDTi4WPfzZWDpWpn17k8IvILrsmw=', NOW()),
+  ('thinh', 'Nguyễn Văn Thịnh', '2280603107', 'STUDENT', 'OJjuJa+ehUMF01YfkQHKmA==', 'wjAACI3XNXq2dm22PENjVolwgjFgf4lPoGnFhK3Ys3Q=', NOW()),
+  ('truong', 'Nguyễn Đan Trường', '2280603486', 'STUDENT', '214h1C2gBfEQdBXb4bpZ/g==', 'baVcYQl6TxMij+bDcweQ4O0c7p+ogrP2aB9z7nq+Jd8=', NOW()),
+  ('bao', 'Chu Nguyễn Gia Bảo', '2380600118', 'STUDENT', '0wZiMPFRUbOWlbNdmcxaDw==', 'Ai2jFWwtnhLuq6ARutZSlC+rcVibdz46h4lMd6q6eNc=', NOW());
 
 -- ---------------------------------------------------------------- Khu vực
 INSERT IGNORE INTO zones (id, name, floor, description) VALUES
   ('A', 'Khu đọc yên tĩnh', 1, 'Giữ trật tự tuyệt đối, phù hợp tự học và ôn thi.'),
-  ('B', 'Khu học nhóm', 2, 'Bàn lớn cho nhóm 4-6 người, được phép thảo luận nhỏ.'),
-  ('C', 'Khu máy tính', 2, 'Máy tính có Internet, tra cứu cơ sở dữ liệu và tài liệu số.'),
-  ('D', 'Phòng học riêng', 3, 'Phòng kín có bảng và máy chiếu, dành cho nhóm thuyết trình.');
+  ('B', 'Khu học đôi', 1, 'Bàn cho 2 người học cặp, kèm bài; được trao đổi nhỏ tiếng.'),
+  ('C', 'Khu học nhóm', 2, 'Bàn lớn cho nhóm 4-6 người, được phép thảo luận nhỏ.'),
+  ('D', 'Khu máy tính', 2, 'Máy tính có Internet, tra cứu cơ sở dữ liệu và tài liệu số.'),
+  ('E', 'Phòng học riêng', 3, 'Phòng kín có bảng và máy chiếu, dành cho nhóm thuyết trình.');
 
 -- ---------------------------------------------------------------- Chỗ ngồi
 INSERT IGNORE INTO seats (id, zone_id, type, capacity, has_outlet, active, note) VALUES
@@ -125,34 +136,44 @@ INSERT IGNORE INTO seats (id, zone_id, type, capacity, has_outlet, active, note)
   ('A18', 'A', 'SINGLE', 1, FALSE, TRUE, NULL),
   ('A19', 'A', 'SINGLE', 1, FALSE, TRUE, NULL),
   ('A20', 'A', 'SINGLE', 1, FALSE, TRUE, NULL),
-  ('B01', 'B', 'GROUP', 6, TRUE, TRUE, NULL),
-  ('B02', 'B', 'GROUP', 6, TRUE, TRUE, NULL),
-  ('B03', 'B', 'GROUP', 6, TRUE, TRUE, NULL),
-  ('B04', 'B', 'GROUP', 6, TRUE, TRUE, NULL),
-  ('B05', 'B', 'GROUP', 4, TRUE, TRUE, NULL),
-  ('B06', 'B', 'GROUP', 4, TRUE, TRUE, NULL),
-  ('B07', 'B', 'GROUP', 4, TRUE, TRUE, NULL),
-  ('B08', 'B', 'GROUP', 4, TRUE, TRUE, NULL),
-  ('C01', 'C', 'COMPUTER', 1, TRUE, TRUE, NULL),
-  ('C02', 'C', 'COMPUTER', 1, TRUE, TRUE, NULL),
-  ('C03', 'C', 'COMPUTER', 1, TRUE, TRUE, NULL),
-  ('C04', 'C', 'COMPUTER', 1, TRUE, TRUE, NULL),
-  ('C05', 'C', 'COMPUTER', 1, TRUE, TRUE, NULL),
-  ('C06', 'C', 'COMPUTER', 1, TRUE, TRUE, NULL),
-  ('C07', 'C', 'COMPUTER', 1, TRUE, TRUE, NULL),
-  ('C08', 'C', 'COMPUTER', 1, TRUE, TRUE, NULL),
-  ('C09', 'C', 'COMPUTER', 1, TRUE, TRUE, NULL),
-  ('C10', 'C', 'COMPUTER', 1, TRUE, TRUE, NULL),
-  ('C11', 'C', 'COMPUTER', 1, TRUE, TRUE, NULL),
-  ('C12', 'C', 'COMPUTER', 1, TRUE, TRUE, NULL),
-  ('D01', 'D', 'ROOM', 8, TRUE, TRUE, NULL),
-  ('D02', 'D', 'ROOM', 8, TRUE, TRUE, NULL),
-  ('D03', 'D', 'ROOM', 8, TRUE, TRUE, NULL),
-  ('D04', 'D', 'ROOM', 8, TRUE, TRUE, NULL);
+  ('B01', 'B', 'PAIR', 2, TRUE, TRUE, NULL),
+  ('B02', 'B', 'PAIR', 2, TRUE, TRUE, NULL),
+  ('B03', 'B', 'PAIR', 2, TRUE, TRUE, NULL),
+  ('B04', 'B', 'PAIR', 2, TRUE, TRUE, NULL),
+  ('B05', 'B', 'PAIR', 2, TRUE, TRUE, NULL),
+  ('B06', 'B', 'PAIR', 2, TRUE, TRUE, NULL),
+  ('B07', 'B', 'PAIR', 2, TRUE, TRUE, NULL),
+  ('B08', 'B', 'PAIR', 2, TRUE, TRUE, NULL),
+  ('B09', 'B', 'PAIR', 2, TRUE, TRUE, NULL),
+  ('B10', 'B', 'PAIR', 2, TRUE, TRUE, NULL),
+  ('C01', 'C', 'GROUP', 6, TRUE, TRUE, NULL),
+  ('C02', 'C', 'GROUP', 6, TRUE, TRUE, NULL),
+  ('C03', 'C', 'GROUP', 6, TRUE, TRUE, NULL),
+  ('C04', 'C', 'GROUP', 6, TRUE, TRUE, NULL),
+  ('C05', 'C', 'GROUP', 4, TRUE, TRUE, NULL),
+  ('C06', 'C', 'GROUP', 4, TRUE, TRUE, NULL),
+  ('C07', 'C', 'GROUP', 4, TRUE, TRUE, NULL),
+  ('C08', 'C', 'GROUP', 4, TRUE, TRUE, NULL),
+  ('D01', 'D', 'COMPUTER', 1, TRUE, TRUE, NULL),
+  ('D02', 'D', 'COMPUTER', 1, TRUE, TRUE, NULL),
+  ('D03', 'D', 'COMPUTER', 1, TRUE, TRUE, NULL),
+  ('D04', 'D', 'COMPUTER', 1, TRUE, TRUE, NULL),
+  ('D05', 'D', 'COMPUTER', 1, TRUE, TRUE, NULL),
+  ('D06', 'D', 'COMPUTER', 1, TRUE, TRUE, NULL),
+  ('D07', 'D', 'COMPUTER', 1, TRUE, TRUE, NULL),
+  ('D08', 'D', 'COMPUTER', 1, TRUE, TRUE, NULL),
+  ('D09', 'D', 'COMPUTER', 1, TRUE, TRUE, NULL),
+  ('D10', 'D', 'COMPUTER', 1, TRUE, TRUE, NULL),
+  ('D11', 'D', 'COMPUTER', 1, TRUE, TRUE, NULL),
+  ('D12', 'D', 'COMPUTER', 1, TRUE, TRUE, NULL),
+  ('E01', 'E', 'ROOM', 8, TRUE, TRUE, NULL),
+  ('E02', 'E', 'ROOM', 8, TRUE, TRUE, NULL),
+  ('E03', 'E', 'ROOM', 8, TRUE, TRUE, NULL),
+  ('E04', 'E', 'ROOM', 8, TRUE, TRUE, NULL);
 
 -- ---------------------------------------------------------------- Thông báo
 INSERT INTO announcements (title, content, author, created_at)
-SELECT 'Chào mừng đến với Thư viện Fix Bug', 'Thư viện Fix Bug mở cửa từ 07:00 đến 21:00, chia thành 5 ca học.\n\nQuy định:\n• Mỗi sinh viên được đặt tối đa 3 ca trong một ngày, đặt trước tối đa 7 ngày.\n• Check-in trong khoảng 15 phút trước đến 15 phút sau giờ bắt đầu ca.\n• Không check-in đúng giờ, hệ thống sẽ tự động hủy và nhường chỗ cho người khác.\n• Nếu không đến được, vui lòng hủy lượt đặt sớm.', 'Quản trị viên Thư viện Fix Bug', NOW()
+SELECT 'Chào mừng đến với Thư viện Fixbug', 'Thư viện Fixbug mở cửa từ 07:00 đến 21:00, chia thành 5 ca học.\n\nQuy định:\n• Mỗi sinh viên được đặt tối đa 3 ca trong một ngày, đặt trước tối đa 3 ngày (tùy điểm uy tín).\n• Check-in trong khoảng 15 phút trước đến 15 phút sau giờ bắt đầu ca.\n• Không check-in đúng giờ, hệ thống sẽ tự động hủy và nhường chỗ cho người khác.\n• Nếu không đến được, vui lòng hủy lượt đặt sớm.', 'Quản trị viên Thư viện Fixbug', NOW()
 FROM DUAL WHERE NOT EXISTS (SELECT 1 FROM announcements);
 
 -- ---------------------------------------------------------------- Truy vấn tham khảo

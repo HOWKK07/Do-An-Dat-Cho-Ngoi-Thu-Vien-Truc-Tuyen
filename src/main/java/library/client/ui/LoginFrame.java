@@ -1,5 +1,6 @@
 package library.client.ui;
 
+import library.client.net.GoogleSignIn;
 import library.client.net.ServerConnection;
 import library.common.Command;
 import library.common.Message;
@@ -16,6 +17,7 @@ import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JPasswordField;
 import javax.swing.JTextField;
+import javax.swing.SwingUtilities;
 import javax.swing.SwingWorker;
 import javax.swing.WindowConstants;
 import java.awt.BorderLayout;
@@ -26,6 +28,7 @@ import java.awt.Font;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
 import java.awt.Insets;
+import java.util.List;
 import java.util.concurrent.ExecutionException;
 import java.util.prefs.Preferences;
 
@@ -41,6 +44,9 @@ public class LoginFrame extends JFrame {
     private final JButton loginButton = new JButton("Đăng nhập");
     private final JButton registerButton = new JButton("Đăng ký tài khoản");
     private final JButton findButton = new JButton("Tìm trong LAN");
+    private final JButton googleButton = new JButton("Đăng nhập bằng Google");
+    /** Khác null khi đang chờ người dùng đăng nhập Google trên trình duyệt (bấm nút lần nữa để hủy). */
+    private volatile GoogleSignIn activeGoogle;
     private final JLabel status = new JLabel(" ");
 
     public LoginFrame() {
@@ -56,6 +62,14 @@ public class LoginFrame extends JFrame {
         loadPreferences();
 
         loginButton.addActionListener(e -> doLogin());
+        googleButton.addActionListener(e -> {
+            GoogleSignIn g = activeGoogle;
+            if (g != null) {
+                g.cancel();
+            } else {
+                doGoogleLogin();
+            }
+        });
         passField.addActionListener(e -> doLogin());
         userField.addActionListener(e -> passField.requestFocusInWindow());
         registerButton.addActionListener(e -> new RegisterDialog(this, host(), port()).setVisible(true));
@@ -73,8 +87,8 @@ public class LoginFrame extends JFrame {
         if (notice != null && !notice.isEmpty()) {
             showStatus(notice, UiKit.DANGER);
         }
-        setSize(860, 500);
-        setMinimumSize(new Dimension(780, 460));
+        setSize(860, 540);
+        setMinimumSize(new Dimension(780, 500));
         setLocationRelativeTo(null);
     }
 
@@ -85,7 +99,7 @@ public class LoginFrame extends JFrame {
         p.setPreferredSize(new Dimension(320, 0));
         p.setBorder(UiKit.padding(48, 32, 32, 28));
         p.add(UiKit.label("THƯ VIỆN", Font.BOLD, 30f, Color.WHITE));
-        p.add(UiKit.label(Protocol.GROUP_NAME.toUpperCase(), Font.BOLD, 34f, UiKit.ACCENT));
+        p.add(UiKit.label(Protocol.BRAND.toUpperCase(), Font.BOLD, 34f, UiKit.ACCENT));
         p.add(Box.createVerticalStrut(6));
         p.add(UiKit.label("Hệ thống đặt chỗ học trực tuyến", Font.PLAIN, 15f, UiKit.PRIMARY_SOFT));
         p.add(Box.createVerticalStrut(36));
@@ -160,6 +174,13 @@ public class LoginFrame extends JFrame {
         buttons.add(Box.createHorizontalStrut(10));
         buttons.add(registerButton);
         p.add(buttons, c);
+
+        c.gridy++;
+        googleButton.setPreferredSize(new Dimension(320, 34));
+        googleButton.setToolTipText("Mở trình duyệt để đăng nhập bằng tài khoản Google (Gmail)");
+        JPanel googleRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
+        googleRow.add(googleButton);
+        p.add(googleRow, c);
 
         c.gridy++;
         c.gridx = 0;
@@ -238,6 +259,118 @@ public class LoginFrame extends JFrame {
         loginButton.setEnabled(!busy);
         registerButton.setEnabled(!busy);
         findButton.setEnabled(!busy);
+        googleButton.setEnabled(!busy);
+    }
+
+    // ------------------------------------------------------------------ Đăng nhập bằng Google
+
+    private void doGoogleLogin() {
+        String host = host();
+        int port = port();
+        if (host.isEmpty() || port <= 0) {
+            showStatus("Vui lòng nhập địa chỉ và cổng máy chủ hợp lệ.", UiKit.DANGER);
+            return;
+        }
+        GoogleSignIn sign = new GoogleSignIn();
+        ServerConnection[] holder = new ServerConnection[1];
+        setBusy(true);
+        showStatus("Đang kết nối tới " + host + ":" + port + "...", UiKit.MUTED);
+
+        new SwingWorker<Message, String>() {
+            @Override
+            protected Message doInBackground() throws Exception {
+                ServerConnection conn = new ServerConnection(host, port);
+                holder[0] = conn;
+                conn.connect();
+                Message cfg = conn.sendAndWait(Message.request(Command.GOOGLE_CONFIG));
+                if (!cfg.isSuccess() || !cfg.getBool("enabled")) {
+                    throw new Exception("Máy chủ chưa bật đăng nhập bằng Google. Quản trị viên cần điền Client ID và "
+                            + "Client secret vào file google.properties của server (xem README).");
+                }
+                activeGoogle = sign;
+                SwingUtilities.invokeLater(() -> {
+                    googleButton.setEnabled(true);
+                    googleButton.setText("Hủy đăng nhập Google");
+                });
+                publish("Đã mở trình duyệt - hãy chọn tài khoản Google và bấm Tiếp tục. Đang chờ...");
+                GoogleSignIn.Result g = sign.run(cfg.getString("authUrl"), cfg.getString("clientId"),
+                        GoogleSignIn::openBrowser, 180);
+                activeGoogle = null;
+                publish("Đang xác minh tài khoản Google với máy chủ...");
+                Message r = conn.sendAndWait(Message.request(Command.GOOGLE_LOGIN).put("code", g.code)
+                        .put("codeVerifier", g.codeVerifier).put("redirectUri", g.redirectUri));
+                if (!r.isSuccess()) {
+                    throw new Exception(r.getText());
+                }
+                return r;
+            }
+
+            @Override
+            protected void process(List<String> chunks) {
+                showStatus(chunks.get(chunks.size() - 1), UiKit.MUTED);
+            }
+
+            @Override
+            protected void done() {
+                activeGoogle = null;
+                googleButton.setText("Đăng nhập bằng Google");
+                try {
+                    Message r = get();
+                    if (r.getBool("needLink")) {
+                        completeGoogle(holder[0], new GoogleLinkDialog(r), null);
+                    } else {
+                        openMain(holder[0], r);
+                    }
+                } catch (ExecutionException e) {
+                    setBusy(false);
+                    closeQuietly(holder[0]);
+                    showStatus(UiKit.rootMessage(e), UiKit.DANGER);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+        }.execute();
+    }
+
+    /** Tài khoản Google chưa liên kết: hỏi tạo mới / liên kết, gửi lên server; lỗi thì hỏi lại kèm thông báo. */
+    private void completeGoogle(ServerConnection conn, GoogleLinkDialog dialog, String error) {
+        Message req = dialog.ask(this, error);
+        if (req == null) {
+            setBusy(false);
+            closeQuietly(conn);
+            showStatus("Đã hủy đăng nhập bằng Google.", UiKit.MUTED);
+            return;
+        }
+        showStatus("Đang hoàn tất đăng nhập...", UiKit.MUTED);
+        conn.send(req).whenComplete((r, ex) -> SwingUtilities.invokeLater(() -> {
+            if (ex != null) {
+                setBusy(false);
+                closeQuietly(conn);
+                showStatus("Mất kết nối tới máy chủ: " + UiKit.rootMessage(ex), UiKit.DANGER);
+            } else if (!r.isSuccess()) {
+                completeGoogle(conn, dialog, r.getText());
+            } else {
+                openMain(conn, r);
+            }
+        }));
+    }
+
+    private void openMain(ServerConnection conn, Message loginResponse) {
+        setBusy(false);
+        conn.setSessionToken(loginResponse.getString("token"));
+        savePreferences();
+        new MainFrame(conn, loginResponse.get("user")).setVisible(true);
+        dispose();
+    }
+
+    private static void closeQuietly(ServerConnection conn) {
+        if (conn != null) {
+            try {
+                conn.close();
+            } catch (RuntimeException ignored) {
+                // đã đóng
+            }
+        }
     }
 
     private void showStatus(String text, Color color) {

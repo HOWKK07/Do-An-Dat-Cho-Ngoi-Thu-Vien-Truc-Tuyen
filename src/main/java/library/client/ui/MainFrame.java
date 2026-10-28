@@ -152,7 +152,7 @@ public class MainFrame extends JFrame implements ServerConnection.Listener {
         header.setBorder(UiKit.padding(10, 16, 10, 12));
         JPanel left = new JPanel(new BorderLayout());
         left.setOpaque(false);
-        left.add(UiKit.label("<html>THƯ VIỆN <font color='#FFC857'>" + Protocol.GROUP_NAME.toUpperCase()
+        left.add(UiKit.label("<html>THƯ VIỆN <font color='#FFC857'>" + Protocol.BRAND.toUpperCase()
                 + "</font></html>", Font.BOLD, 18f, Color.WHITE), BorderLayout.NORTH);
         left.add(UiKit.label("Hệ thống đặt chỗ học trực tuyến", Font.PLAIN, 12f, UiKit.PRIMARY_SOFT), BorderLayout.SOUTH);
 

@@ -1,5 +1,6 @@
 package library.server.db;
 
+import library.common.Protocol;
 import library.server.Log;
 
 import java.io.IOException;
@@ -20,7 +21,7 @@ public class DbConfig {
 
     private static final String TEMPLATE = ""
             + "# ================================================================\n"
-            + "#  Cấu hình kết nối MySQL - Thư viện Fix Bug\n"
+            + "#  Cấu hình kết nối MySQL - " + Protocol.LIBRARY_NAME + "\n"
             + "#  Sửa cho đúng với MySQL trên máy chạy server rồi chạy lại server.\n"
             + "#  XAMPP mặc định: user = root, mật khẩu để trống.\n"
             + "#  MySQL Installer: điền mật khẩu root đã đặt khi cài.\n"
