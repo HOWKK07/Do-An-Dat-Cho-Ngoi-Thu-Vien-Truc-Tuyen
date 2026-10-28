@@ -19,6 +19,10 @@ public enum Command {
     CHECK_IN,
     CHECK_OUT,
     GET_MY_BOOKINGS,
+    /** Người được khai báo đi cùng trả lời lời mời: Đồng ý / Từ chối. */
+    RESPOND_COMPANION,
+    /** Người đặt cả bàn sửa danh sách người đi cùng (khi có người từ chối...). */
+    UPDATE_COMPANIONS,
     GET_ANNOUNCEMENTS,
     GET_MY_REPUTATION,
 

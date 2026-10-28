@@ -2,8 +2,10 @@ package library.server.service;
 
 import library.common.Booking;
 import library.common.BookingStatus;
+import library.common.Companion;
 import library.common.EventType;
 import library.common.Fmt;
+import library.common.Message;
 import library.common.Protocol;
 import library.common.Reputation;
 import library.common.Role;
@@ -22,11 +24,13 @@ import library.server.db.SeatDao;
 import library.server.db.Sql;
 import library.server.db.UserDao;
 import library.server.db.UserDao.Standing;
+import library.server.db.UserDao.UserRecord;
 import library.server.db.ZoneDao;
 import library.server.thread.EventBroadcaster;
 
 import java.sql.Connection;
 import java.sql.SQLException;
+import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -35,6 +39,7 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -58,10 +63,21 @@ public class BookingService {
     private final EventBroadcaster events;
     /** Đặt lẻ được xử lý tuần tự để 2 người cùng lúc không "mở" 2 bàn mới (quy tắc chỉ mở từng bàn). */
     private final Object shareLock = new Object();
+    /** Hẹn giờ chạy một lần (luồng scheduler của server); null = không hẹn (VD trong kiểm thử). */
+    private volatile DelayedRunner delayed;
+
+    /** Cách chạy một tác vụ sau một khoảng thời gian - server dùng {@code ServerThreadPools.scheduleOnce}. */
+    public interface DelayedRunner {
+        void runAfter(Runnable task, long delayMs);
+    }
 
     public BookingService(Database db, EventBroadcaster events) {
         this.db = db;
         this.events = events;
+    }
+
+    public void setDelayedRunner(DelayedRunner delayed) {
+        this.delayed = delayed;
     }
 
     // ------------------------------------------------------------------ Xem sơ đồ chỗ
@@ -81,7 +97,11 @@ public class BookingService {
             }
             Map<String, List<Booking>> bySeat = new HashMap<>();
             int mine = 0;
-            for (Booking b : BookingDao.liveOnDate(c, date)) {
+            List<Booking> live = BookingDao.liveOnDate(c, date);
+            if (admin) {
+                BookingDao.attachCompanions(c, live); // quản trị viên xem được ai đi cùng
+            }
+            for (Booking b : live) {
                 if (b.getUsername().equals(viewer.getUsername()) && !b.isWalkIn()) {
                     mine++;
                 }
@@ -163,15 +183,25 @@ public class BookingService {
      * @param onePlace true = đặt lẻ MỘT chỗ trên bàn đang mở ngồi ghép; false = đặt cả chỗ / cả bàn như thường
      */
     public Booking book(UserInfo user, String rawSeatId, LocalDate date, int slot, boolean onePlace) {
-        if (onePlace) {
-            synchronized (shareLock) {
-                return doBook(user, rawSeatId, date, slot, true);
-            }
-        }
-        return doBook(user, rawSeatId, date, slot, false);
+        return book(user, rawSeatId, date, slot, onePlace, null);
     }
 
-    private Booking doBook(UserInfo user, String rawSeatId, LocalDate date, int slot, boolean onePlace) {
+    /**
+     * @param companions người đi cùng (MSSV hoặc tên đăng nhập) - bắt buộc khi sinh viên đặt CẢ bàn nhiều chỗ:
+     *                   tối thiểu {@link Protocol#minPeopleForTable} người kể cả người đặt
+     */
+    public Booking book(UserInfo user, String rawSeatId, LocalDate date, int slot, boolean onePlace,
+                        List<String> companions) {
+        if (onePlace) {
+            synchronized (shareLock) {
+                return doBook(user, rawSeatId, date, slot, true, null);
+            }
+        }
+        return doBook(user, rawSeatId, date, slot, false, companions);
+    }
+
+    private Booking doBook(UserInfo user, String rawSeatId, LocalDate date, int slot, boolean onePlace,
+                           List<String> companions) {
         TimeSlot ts = requireSlot(date, slot);
         String seatId = rawSeatId == null ? "" : rawSeatId.trim().toUpperCase();
         String err = bookingWindowError(date, ts, LocalDateTime.now());
@@ -179,7 +209,9 @@ public class BookingService {
             throw new ServiceException(err);
         }
 
+        List<UserRecord> mates = new ArrayList<>();
         Booking created = db.tx(c -> {
+            mates.clear(); // transaction có thể được chạy lại khi deadlock
             Seat seat = SeatDao.findForUpdate(c, seatId); // khóa chỗ: các lượt đặt vào cùng chỗ / bàn xử lý lần lượt
             if (seat == null) {
                 throw new ServiceException("Chỗ ngồi " + seatId + " không tồn tại.");
@@ -189,6 +221,11 @@ public class BookingService {
             }
             // Khóa dòng người dùng: các yêu cầu của cùng một người được xử lý tuần tự; đọc luôn điểm uy tín
             Standing standing = UserDao.standingForUpdate(c, user.getUsername());
+            // Đặt CẢ bàn nhiều chỗ: khóa luôn tài khoản những người đi cùng (trước mọi lệnh đọc khác) để họ không
+            // vừa được khai báo ở đây vừa tự đặt chỗ khác cùng lúc
+            if (!onePlace && seat.getCapacity() >= 2 && standing.role == Role.STUDENT) {
+                mates.addAll(lockCompanions(c, user, seat, companions));
+            }
             Reputation.Level level = standing.level(LocalDate.now());
             String repError = reputationError(standing, level, date);
             if (repError != null) {
@@ -202,6 +239,14 @@ public class BookingService {
                             + " trong ca này rồi. Mỗi ca chỉ được giữ một chỗ.");
                 }
                 countThatDay++;
+            }
+            Booking asCompanion = BookingDao.liveAsCompanion(c, user.getUsername(), date, slot);
+            if (asCompanion != null) {
+                throw new ServiceException("Bạn đã được " + asCompanion.getFullName() + " khai báo là người đi cùng ở bàn "
+                        + asCompanion.getSeatId() + " trong ca này nên không đặt thêm chỗ khác.");
+            }
+            for (UserRecord m : mates) {
+                checkCanJoin(c, m, date, slot, null);
             }
             if (countThatDay >= level.getMaxPerDay()) {
                 throw new ServiceException("Bạn đã đặt đủ " + level.getMaxPerDay() + " ca trong ngày " + Fmt.date(date)
@@ -229,7 +274,13 @@ public class BookingService {
             b.setCreatedAt(LocalDateTime.now().withNano(0));
             b.setStatus(BookingStatus.ACTIVE);
             try {
-                return BookingDao.insert(c, b, true);
+                BookingDao.insert(c, b, true);
+                for (UserRecord m : mates) {
+                    BookingDao.addCompanion(c, b.getId(), m.username, b.getCreatedAt());
+                    b.getCompanions().add(new Companion(m.username, m.fullName, m.studentId, Companion.Status.PENDING));
+                }
+                b.setSeatCapacity(seat.getCapacity());
+                return b;
             } catch (SQLException e) {
                 // Chốt chặn cuối: luồng khác vừa INSERT cùng chỗ / cùng người trong ca này
                 if (Sql.isDuplicate(e, BookingDao.UQ_SEAT_LIVE)) {
@@ -242,7 +293,14 @@ public class BookingService {
             }
         });
 
-        Log.info("%s đặt %s -> %s", user.getUsername(), created.describe(), created.getId());
+        Log.info("%s đặt %s -> %s%s", user.getUsername(), created.describe(), created.getId(),
+                mates.isEmpty() ? "" : " (mời đi cùng: " + created.getCompanionNames() + ")");
+        for (UserRecord m : mates) {
+            sendInvite(m.username, user.getFullName(), created);
+        }
+        if (!mates.isEmpty()) {
+            scheduleChecks(created.getId(), created.getCreatedAt());
+        }
         events.seatsChanged(date, slot);
         return created;
     }
@@ -564,9 +622,53 @@ public class BookingService {
         throw new ServiceException("Bàn " + seat.getId() + " vừa đủ người. Vui lòng chọn bàn đang mở tiếp theo.");
     }
 
+    /** Kiểm tra danh sách người đi cùng khi đặt cả bàn và khóa tài khoản của họ. */
+    private static List<UserRecord> lockCompanions(Connection c, UserInfo booker, Seat seat, List<String> raw)
+            throws SQLException {
+        int capacity = seat.getCapacity();
+        int minPeople = Protocol.minPeopleForTable(capacity);
+        Set<String> idents = new LinkedHashSet<>();
+        if (raw != null) {
+            for (String r : raw) {
+                if (r != null && !r.trim().isEmpty()) {
+                    idents.add(r.trim().toLowerCase());
+                }
+            }
+        }
+        List<UserRecord> mates = new ArrayList<>();
+        Set<String> seen = new HashSet<>();
+        for (String ident : idents) {
+            UserRecord u = UserDao.findByUsernameOrStudentIdForUpdate(c, ident);
+            if (u == null) {
+                throw new CompanionException("Không tìm thấy sinh viên '" + ident
+                        + "'. Hãy nhập đúng mã số sinh viên hoặc tên đăng nhập (người đi cùng cần có tài khoản).");
+            }
+            if (u.role != Role.STUDENT) {
+                throw new CompanionException("'" + ident + "' không phải tài khoản sinh viên.");
+            }
+            if (u.username.equals(booker.getUsername())) {
+                throw new CompanionException("Không cần khai báo chính bạn - chỉ nhập những người đi cùng.");
+            }
+            if (seen.add(u.username)) {
+                mates.add(u);
+            }
+        }
+        if (mates.size() + 1 < minPeople) {
+            throw new CompanionException("Bàn " + seat.getId() + " có " + capacity + " chỗ: đặt cả bàn cần ít nhất "
+                    + minPeople + " người (gồm bạn), hãy khai báo thêm " + (minPeople - 1 - mates.size())
+                    + " người đi cùng. Đi ít người hơn thì hãy đặt chỗ đơn, hoặc đặt 1 chỗ ngồi ghép khi bàn mở.");
+        }
+        if (mates.size() > capacity - 1) {
+            throw new CompanionException("Bàn " + seat.getId() + " chỉ có " + capacity + " chỗ - khai báo tối đa "
+                    + (capacity - 1) + " người đi cùng.");
+        }
+        return mates;
+    }
+
     private static String holderInfo(Booking b) {
         if (!b.isWalkIn()) {
-            return b.getFullName() + " (" + b.getUsername() + ")";
+            return b.getFullName() + " (" + b.getUsername() + ")"
+                    + (b.getCompanions().isEmpty() ? "" : ", đi cùng: " + b.getCompanionsLabel());
         }
         StringBuilder sb = new StringBuilder(b.getFullName()).append(" - đặt tại quầy");
         if (b.getStudentId() != null) {
@@ -588,7 +690,9 @@ public class BookingService {
     // ------------------------------------------------------------------ Hủy / check-in / trả chỗ
 
     public Booking cancelByUser(UserInfo user, String bookingId) {
+        List<String> mates = new ArrayList<>();
         Booking b = db.tx(c -> {
+            mates.clear();
             Booking x = requireBooking(c, bookingId);
             if (!x.getUsername().equals(user.getUsername())) {
                 throw new ServiceException("Bạn không thể hủy lượt đặt của người khác.");
@@ -601,6 +705,7 @@ public class BookingService {
             }
             LocalDateTime now = LocalDateTime.now();
             boolean late = !now.isBefore(x.getTimeSlot().startAt(x.getDate()).minusMinutes(Reputation.LATE_CANCEL_MINUTES));
+            mates.addAll(BookingDao.companionUsernames(c, x.getId()));
             Booking done = finish(c, x, BookingStatus.CANCELLED, late
                     ? "Người dùng hủy sát giờ (dưới " + Reputation.LATE_CANCEL_MINUTES + " phút trước ca)"
                     : "Người dùng tự hủy");
@@ -615,20 +720,33 @@ public class BookingService {
         });
         Log.info("%s hủy lượt đặt %s (%s)", user.getUsername(), b.getId(), b.describe());
         events.seatsChanged(b.getDate(), b.getSlot());
+        notifyCompanionsCancelled(mates, b, user.getFullName() + " đã hủy");
         return b;
+    }
+
+    /** Báo cho những người đi cùng biết bàn đã bị hủy để họ tự đặt chỗ khác. */
+    private void notifyCompanionsCancelled(List<String> mates, Booking b, String who) {
+        for (String m : mates) {
+            events.sendToUser(m, EventType.BOOKING_UPDATED, who + " lượt đặt " + b.getId() + " (" + b.describe()
+                    + ") mà bạn được khai báo đi cùng. Bạn có thể tự đặt chỗ khác.");
+        }
     }
 
     public Booking cancelByAdmin(UserInfo admin, String bookingId, String reason) {
         String why = reason == null || reason.trim().isEmpty() ? "" : ": " + reason.trim();
+        List<String> mates = new ArrayList<>();
         Booking b = db.tx(c -> {
+            mates.clear();
             Booking x = requireBooking(c, bookingId);
             if (!x.getStatus().isLive()) {
                 throw new ServiceException("Lượt đặt này đã kết thúc (" + x.getStatus().getLabel() + ").");
             }
+            mates.addAll(BookingDao.companionUsernames(c, x.getId()));
             return finish(c, x, BookingStatus.CANCELLED, "Quản trị viên hủy" + why);
         });
         Log.info("Quản trị viên %s hủy lượt đặt %s của %s", admin.getUsername(), b.getId(), b.getUsername());
         events.seatsChanged(b.getDate(), b.getSlot());
+        notifyCompanionsCancelled(mates, b, "Quản trị viên đã hủy");
         if (!b.getUsername().equals(admin.getUsername())) {
             events.sendToUser(b.getUsername(), EventType.BOOKING_UPDATED,
                     "Lượt đặt " + b.getId() + " (" + b.describe() + ") đã bị quản trị viên hủy" + why);
@@ -658,6 +776,10 @@ public class BookingService {
             }
             if (now.isAfter(close)) {
                 throw new ServiceException("Đã quá giờ check-in (hạn chót " + Fmt.time(close) + ").");
+            }
+            String notReady = companionsNotReady(c, x);
+            if (notReady != null) {
+                throw new ServiceException(notReady);
             }
             BookingDao.checkIn(c, x.getId(), now);
             x.setStatus(BookingStatus.CHECKED_IN);
@@ -701,11 +823,353 @@ public class BookingService {
     // ------------------------------------------------------------------ Danh sách
 
     public List<Booking> myBookings(String username) {
-        return db.query(c -> BookingDao.ofUser(c, username));
+        return db.query(c -> {
+            List<Booking> list = BookingDao.ofUser(c, username);
+            BookingDao.attachCompanions(c, list);
+            return list;
+        });
     }
 
     public List<Booking> allBookings(LocalDate date, BookingStatus status) {
-        return db.query(c -> BookingDao.search(c, date, status));
+        return db.query(c -> {
+            List<Booking> list = BookingDao.search(c, date, status);
+            BookingDao.attachCompanions(c, list);
+            return list;
+        });
+    }
+
+    /** Các bàn mà sinh viên được người khác khai báo đi cùng, kèm trạng thái xác nhận của sinh viên đó. */
+    public List<Booking> companionInvites(String username) {
+        return db.query(c -> {
+            List<Booking> list = BookingDao.invitesOf(c, username);
+            BookingDao.attachCompanions(c, list);
+            return list;
+        });
+    }
+
+    // ------------------------------------------------------------------ Xác nhận người đi cùng
+
+    /**
+     * Người được khai báo đi cùng trả lời lời mời. Đồng ý: được tính vào số người để check-in, nhưng nếu cả nhóm
+     * không đến sẽ bị trừ {@link Reputation#COMPANION_NO_SHOW_PENALTY} điểm. Từ chối: được tự đặt chỗ khác trong ca,
+     * người đặt được báo để khai báo người thay thế. Trả lời được khi lượt đặt còn chờ check-in.
+     */
+    public Booking respondCompanion(UserInfo user, String bookingId, boolean accept) {
+        String[] bookerNote = new String[1];
+        LocalDateTime now = LocalDateTime.now().withNano(0);
+        Booking b = db.tx(c -> {
+            bookerNote[0] = null;
+            Booking x = requireBooking(c, bookingId); // khóa lượt đặt: các thay đổi danh sách xử lý lần lượt
+            List<Companion> list = BookingDao.companionsOf(c, x.getId());
+            Companion me = list.stream().filter(m -> m.getUsername().equals(user.getUsername())).findFirst().orElse(null);
+            if (me == null) {
+                throw new ServiceException("Bạn không có trong danh sách người đi cùng của lượt đặt " + x.getId() + ".");
+            }
+            if (x.getStatus() == BookingStatus.CHECKED_IN) {
+                throw new ServiceException("Nhóm của " + x.getFullName() + " đã check-in, không cần xác nhận nữa.");
+            }
+            if (x.getStatus() != BookingStatus.ACTIVE) {
+                throw new ServiceException("Lượt đặt " + x.getId() + " đã kết thúc (" + x.getStatus().getLabel() + ").");
+            }
+            if (me.isDeclined()) {
+                throw new ServiceException("Bạn đã từ chối lời mời này. Nếu muốn đi cùng, hãy nhờ " + x.getFullName()
+                        + " thêm lại bạn vào danh sách người đi cùng.");
+            }
+            Companion.Status target = accept ? Companion.Status.ACCEPTED : Companion.Status.DECLINED;
+            x.setMyCompanionStatus(target);
+            if (me.getStatus() != target) {
+                BookingDao.setCompanionStatus(c, x.getId(), user.getUsername(), target, now);
+            }
+            BookingDao.attachCompanions(c, Collections.singletonList(x));
+            if (me.getStatus() == target) {
+                return x; // bấm lại lần nữa: không đổi gì, không báo lại
+            }
+            String who = user.getFullName() + " đã " + (accept ? "đồng ý" : "từ chối") + " đi cùng bạn ở "
+                    + x.describe() + " (mã " + x.getId() + "). ";
+            if (x.isCompanionsReady()) {
+                bookerNote[0] = who + "Đã đủ người xác nhận - nhóm có thể check-in.";
+            } else if (x.isCompanionsShort()) {
+                bookerNote[0] = who + "Bàn đang THIẾU NGƯỜI: cần " + x.getCompanionsNeeded() + " người đi cùng. Hãy vào "
+                        + "\"Lịch đặt của tôi\" → \"Sửa người đi cùng\" để thêm người trước "
+                        + Fmt.time(x.getCompanionDeadline()) + ", nếu không lượt đặt sẽ tự hủy.";
+            } else {
+                bookerNote[0] = who + "Đã xác nhận " + x.getAcceptedCompanionCount() + "/" + x.getCompanionsNeeded()
+                        + " người (cần đủ trước " + Fmt.time(x.getCompanionDeadline()) + ").";
+            }
+            return x;
+        });
+        if (bookerNote[0] != null) {
+            Log.info("%s %s lời mời đi cùng lượt %s", user.getUsername(), accept ? "đồng ý" : "từ chối", b.getId());
+            events.sendToUser(b.getUsername(), EventType.BOOKING_UPDATED, bookerNote[0]);
+        }
+        return b;
+    }
+
+    /**
+     * Người đặt cả bàn sửa danh sách người đi cùng (VD khi có người từ chối). Người giữ nguyên trong danh sách
+     * giữ trạng thái xác nhận; người mới (hoặc được mời lại) ở trạng thái chờ xác nhận; người bị bỏ ra được báo tin.
+     */
+    public Booking updateCompanions(UserInfo user, String bookingId, List<String> rawCompanions) {
+        List<UserRecord> invited = new ArrayList<>();
+        List<String> removed = new ArrayList<>();
+        LocalDateTime now = LocalDateTime.now().withNano(0);
+        Booking b = db.tx(c -> {
+            invited.clear();
+            removed.clear();
+            Booking x = requireBooking(c, bookingId);
+            if (!x.getUsername().equals(user.getUsername())) {
+                throw new ServiceException("Đây không phải lượt đặt của bạn.");
+            }
+            if (x.getStatus() != BookingStatus.ACTIVE) {
+                throw new ServiceException("Chỉ sửa được người đi cùng khi lượt đặt đang chờ check-in (hiện: "
+                        + x.getStatus().getLabel() + ").");
+            }
+            LocalDateTime close = x.getTimeSlot().startAt(x.getDate()).plusMinutes(Protocol.CHECKIN_LATE_MINUTES);
+            if (LocalDateTime.now().isAfter(close)) {
+                throw new ServiceException("Đã quá giờ check-in của lượt đặt này.");
+            }
+            Seat seat = SeatDao.findForUpdate(c, x.getSeatId());
+            if (seat == null || seat.getCapacity() < 2 || x.isSharedPlace() || x.isWalkIn()) {
+                throw new ServiceException("Lượt đặt này không phải đặt cả bàn nhiều chỗ nên không có người đi cùng.");
+            }
+            List<UserRecord> mates = lockCompanions(c, user, seat, rawCompanions);
+            Map<String, Companion> old = new HashMap<>();
+            for (Companion m : BookingDao.companionsOf(c, x.getId())) {
+                old.put(m.getUsername(), m);
+            }
+            Set<String> keep = new HashSet<>();
+            for (UserRecord m : mates) {
+                keep.add(m.username);
+                Companion was = old.get(m.username);
+                if (was != null && !was.isDeclined()) {
+                    continue; // giữ nguyên trạng thái đã xác nhận / đang chờ
+                }
+                checkCanJoin(c, m, x.getDate(), x.getSlot(), x.getId());
+                BookingDao.addCompanion(c, x.getId(), m.username, now);
+                invited.add(m);
+            }
+            for (Companion m : old.values()) {
+                if (!keep.contains(m.getUsername())) {
+                    BookingDao.removeCompanion(c, x.getId(), m.getUsername());
+                    if (!m.isDeclined()) {
+                        removed.add(m.getUsername());
+                    }
+                }
+            }
+            if (old.values().stream().anyMatch(Companion::isReminded)) {
+                BookingDao.markReminded(c, x.getId()); // đã nhắc rồi thì sửa danh sách cũng không nhắc lại
+            }
+            BookingDao.attachCompanions(c, Collections.singletonList(x));
+            return x;
+        });
+        Log.info("%s sửa người đi cùng lượt %s: %s", user.getUsername(), b.getId(), b.getCompanionsLabel());
+        for (UserRecord m : invited) {
+            sendInvite(m.username, user.getFullName(), b); // hạn trả lời vẫn tính từ lúc đặt
+        }
+        for (String m : removed) {
+            events.sendToUser(m, EventType.BOOKING_UPDATED, user.getFullName() + " đã bỏ bạn khỏi danh sách người đi cùng ở "
+                    + b.describe() + " (mã " + b.getId() + "). Bạn có thể tự đặt chỗ khác.");
+        }
+        return b;
+    }
+
+    // ------------------------------------------------------------------ Nhắc sau 15 phút, tự hủy sau 30 phút
+
+    /**
+     * Hẹn kiểm tra lượt {@code bookingId} tại 2 mốc CỐ ĐỊNH tính từ lúc đặt ({@code bookedAt}): +15 phút (nhắc người
+     * đặt) và +30 phút (tự hủy nếu vẫn chưa đủ người xác nhận). Mỗi mốc là một mục hẹn giờ chạy 1 lần.
+     */
+    private void scheduleChecks(String bookingId, LocalDateTime bookedAt) {
+        DelayedRunner d = delayed;
+        if (d == null || bookedAt == null) {
+            return;
+        }
+        for (int minutes : new int[]{Protocol.COMPANION_REMIND_MINUTES, Protocol.COMPANION_CONFIRM_MINUTES}) {
+            LocalDateTime due = bookedAt.plusMinutes(minutes).plusSeconds(1);
+            d.runAfter(() -> checkCompanions(bookingId), Math.max(0, Duration.between(LocalDateTime.now(), due).toMillis()));
+        }
+    }
+
+    /**
+     * Khởi động server: hẹn lại mốc nhắc / tự hủy cho các lượt đặt cả bàn đang chờ check-in
+     * (mốc đã qua trong lúc server tắt thì chạy ngay).
+     *
+     * @return số lượt đặt chưa đủ người xác nhận
+     */
+    public int scheduleCompanionChecks() {
+        List<Booking> list = db.query(c -> {
+            List<Booking> l = BookingDao.liveWithCompanions(c);
+            BookingDao.attachCompanions(c, l);
+            return l;
+        });
+        int n = 0;
+        for (Booking b : list) {
+            if (!b.isCompanionsReady()) {
+                scheduleChecks(b.getId(), b.getCreatedAt());
+                n++;
+            }
+        }
+        return n;
+    }
+
+    /**
+     * Kiểm tra một lượt đặt cả bàn chưa đủ người xác nhận đi cùng (thời gian tính cố định từ lúc đặt):
+     * <ul>
+     *   <li>đủ 30 phút → tự hủy (như người đặt tự hủy: sát giờ dưới 60 phút trước ca thì −5 điểm), báo người đặt
+     *       và người đi cùng, nhả bàn cho người khác;</li>
+     *   <li>đủ 15 phút → nhắc người đặt (hộp hỏi Sửa người đi cùng / Hủy lượt đặt / Để sau), mỗi lượt đặt nhắc 1 lần.</li>
+     * </ul>
+     * Lượt đã đủ người, đã check-in / hủy, hoặc đã quá giờ check-in (để tác vụ quá hạn xử lý) thì bỏ qua.
+     *
+     * @return "hủy", "nhắc" hoặc null nếu không làm gì
+     */
+    public String checkCompanions(String bookingId) {
+        LocalDateTime now = LocalDateTime.now().withNano(0);
+        String[] reminder = new String[1];
+        boolean[] cancelled = new boolean[1];
+        List<String> mates = new ArrayList<>();
+        Booking b = db.tx(c -> {
+            reminder[0] = null;
+            cancelled[0] = false;
+            mates.clear();
+            Booking x = BookingDao.findForUpdate(c, bookingId);
+            if (x == null || x.getStatus() != BookingStatus.ACTIVE || x.getTimeSlot() == null || x.isWalkIn()
+                    || x.isSharedPlace()) {
+                return x;
+            }
+            LocalDateTime start = x.getTimeSlot().startAt(x.getDate());
+            if (now.isAfter(start.plusMinutes(Protocol.CHECKIN_LATE_MINUTES))) {
+                return x; // hết giờ check-in: tác vụ quá hạn xử lý như không đến
+            }
+            BookingDao.attachCompanions(c, Collections.singletonList(x));
+            LocalDateTime deadline = x.getCompanionDeadline();
+            if (deadline == null) {
+                return x; // đủ người xác nhận rồi
+            }
+            String count = x.getAcceptedCompanionCount() + "/" + x.getCompanionsNeeded();
+            if (!now.isBefore(deadline)) {
+                for (Companion m : x.getCompanions()) {
+                    if (!m.isDeclined()) {
+                        mates.add(m.getUsername());
+                    }
+                }
+                finish(c, x, BookingStatus.CANCELLED, "Tự hủy: quá " + Protocol.COMPANION_CONFIRM_MINUTES
+                        + " phút chưa đủ người xác nhận đi cùng (" + count + ")");
+                if (!now.isBefore(start.minusMinutes(Reputation.LATE_CANCEL_MINUTES))) {
+                    ReputationService.Change ch = ReputationService.change(c, x.getUsername(),
+                            -Reputation.LATE_CANCEL_PENALTY, "Lượt đặt cả bàn " + x.getId() + " (" + x.describe()
+                                    + ") tự hủy sát giờ do chưa đủ người xác nhận đi cùng", x.getId(), now.toLocalDate());
+                    if (ch != null) {
+                        x.setReputationNote(ch.describe());
+                    }
+                }
+                cancelled[0] = true;
+                return x;
+            }
+            boolean remindedBefore = x.getCompanions().stream().anyMatch(Companion::isReminded);
+            if (!now.isBefore(x.getCreatedAt().plusMinutes(Protocol.COMPANION_REMIND_MINUTES)) && !remindedBefore) {
+                BookingDao.markReminded(c, x.getId());
+                StringBuilder waiting = new StringBuilder();
+                for (Companion m : x.getCompanions()) {
+                    if (m.getStatus() == Companion.Status.PENDING) {
+                        waiting.append(waiting.length() == 0 ? "" : ", ").append(m.getName());
+                    }
+                }
+                reminder[0] = "Lượt đặt " + x.getId() + " (" + x.describe() + ") vẫn chưa đủ người "
+                        + "xác nhận đi cùng: mới có " + count + " người đồng ý"
+                        + (waiting.length() > 0 ? ", chưa trả lời: " + waiting : "")
+                        + (x.isCompanionsShort() ? ". Có người đã từ chối nên cần thêm người khác" : "")
+                        + ".\nNếu đến " + Fmt.time(deadline) + " vẫn chưa đủ người đồng ý, lượt đặt sẽ TỰ HỦY. "
+                        + "Hãy thêm / thay người đi cùng, hoặc hủy lượt đặt nếu nhóm không đi nữa.";
+            }
+            return x;
+        });
+        if (cancelled[0]) {
+            Log.info("Tự hủy lượt %s của %s: quá %d phút chưa đủ người xác nhận đi cùng", b.getId(), b.getUsername(),
+                    Protocol.COMPANION_CONFIRM_MINUTES);
+            events.sendToUser(b.getUsername(), EventType.BOOKING_UPDATED, "Lượt đặt " + b.getId() + " (" + b.describe()
+                    + ") đã TỰ HỦY vì quá " + Protocol.COMPANION_CONFIRM_MINUTES + " phút chưa đủ người xác nhận đi cùng"
+                    + (b.getReputationNote() != null ? " (" + b.getReputationNote() + ")" : "") + ".");
+            notifyCompanionsCancelled(mates, b, "Hệ thống đã tự hủy (chưa đủ người xác nhận)");
+            events.seatsChanged(b.getDate(), b.getSlot());
+            return "hủy";
+        }
+        if (reminder[0] != null) {
+            Log.info("Nhắc %s: lượt %s chưa đủ người xác nhận đi cùng", b.getUsername(), b.getId());
+            events.sendToUser(b.getUsername(),
+                    Message.event(EventType.COMPANION_REMINDER, reminder[0]).put("bookingId", b.getId()));
+            return "nhắc";
+        }
+        return null;
+    }
+
+    /** Người được khai báo phải chưa tự đặt chỗ trong ca và chưa đi cùng bàn khác (bỏ qua lượt {@code exceptId}). */
+    private static void checkCanJoin(Connection c, UserRecord m, LocalDate date, int slot, String exceptId)
+            throws SQLException {
+        for (Booking other : BookingDao.liveOfUserOnDate(c, m.username, date)) {
+            if (other.getSlot() == slot) {
+                throw new CompanionException(m.fullName + " đã tự đặt chỗ " + other.getSeatLabel()
+                        + " trong ca này nên không thể là người đi cùng.");
+            }
+        }
+        Booking taken = BookingDao.liveAsCompanion(c, m.username, date, slot, exceptId);
+        if (taken != null) {
+            throw new CompanionException(m.fullName + " đã được " + taken.getFullName()
+                    + " khai báo đi cùng ở bàn " + taken.getSeatId() + " trong ca này.");
+        }
+    }
+
+    /** Lời mời đi cùng: client hiện hộp hỏi Đồng ý / Từ chối. */
+    private void sendInvite(String username, String bookerName, Booking b) {
+        events.sendToUser(username, Message.event(EventType.COMPANION_INVITE, bookerName + " mời bạn đi cùng ở "
+                + b.describe() + " (mã " + b.getId() + "). Bạn có đi không? Hãy trả lời trước "
+                + Fmt.time(b.getCreatedAt().plusMinutes(Protocol.COMPANION_CONFIRM_MINUTES)) + " - nếu lúc đó bàn chưa đủ người "
+                + "đồng ý, lượt đặt sẽ tự hủy. Đồng ý mà cả nhóm không đến thì bạn bị trừ "
+                + Reputation.COMPANION_NO_SHOW_PENALTY + " điểm uy tín.").put("bookingId", b.getId()));
+    }
+
+    /**
+     * Lỗi nếu lượt đặt cả bàn chưa đủ người đã xác nhận đi cùng để check-in (lượt đặt tạo trước khi có chức năng
+     * khai báo người đi cùng thì bỏ qua), hoặc null nếu đủ.
+     */
+    private static String companionsNotReady(Connection c, Booking x) throws SQLException {
+        if (x.isWalkIn() || x.isSharedPlace()) {
+            return null;
+        }
+        BookingDao.attachCompanions(c, Collections.singletonList(x));
+        if (x.isCompanionsReady()) {
+            return null;
+        }
+        int min = x.getCompanionsNeeded() + 1;
+        if (x.isCompanionsShort()) {
+            return "Bàn " + x.getSeatId() + " đang thiếu người vì có người từ chối đi cùng: cần ít nhất " + min
+                    + " người (gồm bạn). Hãy bấm \"Sửa người đi cùng\" để khai báo thêm người rồi check-in.";
+        }
+        StringBuilder waiting = new StringBuilder();
+        for (Companion m : x.getCompanions()) {
+            if (m.getStatus() == Companion.Status.PENDING) {
+                waiting.append(waiting.length() == 0 ? "" : ", ").append(m.getName());
+            }
+        }
+        return "Bàn " + x.getSeatId() + " cần ít nhất " + min + " người (gồm bạn) đã xác nhận đi cùng mới check-in được - "
+                + "hiện mới có " + x.getAcceptedCompanionCount() + "/" + x.getCompanionsNeeded() + " người đồng ý (đang chờ: "
+                + waiting + "). Hãy nhắc bạn bè mở ứng dụng, vào \"Lịch đặt của tôi\" và bấm \"Đồng ý đi cùng\".";
+    }
+
+    /** Cả nhóm không đến: những người đã bấm "Đồng ý" đi cùng cũng bị trừ điểm (trong transaction đang mở). */
+    private static void penalizeAcceptedCompanions(Connection c, Booking b, LocalDate today, List<String[]> notes)
+            throws SQLException {
+        for (Companion m : BookingDao.companionsOf(c, b.getId())) {
+            if (!m.isAccepted()) {
+                continue;
+            }
+            ReputationService.Change ch = ReputationService.change(c, m.getUsername(), -Reputation.COMPANION_NO_SHOW_PENALTY,
+                    "Đã xác nhận đi cùng " + b.getFullName() + " nhưng cả nhóm không đến - lượt " + b.getId()
+                            + " (" + b.describe() + ")", b.getId(), today);
+            notes.add(new String[]{m.getUsername(), "Nhóm của " + b.getFullName() + " không check-in lượt " + b.getId()
+                    + " (" + b.describe() + "). Bạn đã xác nhận đi cùng nên bị trừ điểm"
+                    + (ch != null ? ": " + ch.describe() : "") + "."});
+        }
     }
 
     // ------------------------------------------------------------------ Tác vụ nền (luồng scheduler)
@@ -726,7 +1190,9 @@ public class BookingService {
         if (due.isEmpty()) {
             return; // không mở transaction khi không có gì cần đổi
         }
+        List<String[]> mateNotes = new ArrayList<>(); // {username, nội dung thông báo}
         List<Booking> changed = db.tx(c -> {
+            mateNotes.clear(); // transaction có thể được chạy lại khi deadlock
             List<Booking> list = new ArrayList<>();
             for (Booking b : due) {
                 BookingStatus target = b.getStatus() == BookingStatus.ACTIVE ? BookingStatus.EXPIRED : BookingStatus.COMPLETED;
@@ -737,11 +1203,20 @@ public class BookingService {
                     b.setNote(note);
                     b.setFinishedAt(now);
                     if (target == BookingStatus.EXPIRED && !b.isWalkIn()) { // không đến → trừ điểm uy tín
-                        ReputationService.Change ch = ReputationService.change(c, b.getUsername(),
-                                -Reputation.NO_SHOW_PENALTY, "Không đến / không check-in lượt " + b.getId()
-                                        + " (" + b.describe() + ")", b.getId(), now.toLocalDate());
+                        // Đặt cả bàn nhiều chỗ rồi bỏ trống → trừ nặng hơn (theo số chỗ của bàn, tối đa 40)
+                        Seat seat = SeatDao.find(c, b.getSeatId());
+                        int capacity = seat != null ? seat.getCapacity() : 1;
+                        int penalty = Reputation.noShowPenalty(capacity, !b.isSharedPlace());
+                        ReputationService.Change ch = ReputationService.change(c, b.getUsername(), -penalty,
+                                "Không đến / không check-in lượt " + b.getId() + " (" + b.describe() + ")"
+                                        + (penalty > Reputation.NO_SHOW_PENALTY
+                                        ? " - đặt cả bàn " + capacity + " người" : ""),
+                                b.getId(), now.toLocalDate());
                         if (ch != null) {
                             b.setReputationNote(ch.describe());
+                        }
+                        if (!b.isSharedPlace()) {
+                            penalizeAcceptedCompanions(c, b, now.toLocalDate(), mateNotes);
                         }
                     }
                     list.add(b);
@@ -749,6 +1224,9 @@ public class BookingService {
             }
             return list;
         });
+        for (String[] n : mateNotes) {
+            events.sendToUser(n[0], EventType.BOOKING_UPDATED, n[1]);
+        }
         for (Booking b : changed) {
             if (b.getStatus() == BookingStatus.EXPIRED) {
                 Log.info("Tự hủy lượt %s của %s do không check-in", b.getId(), b.getUsername());

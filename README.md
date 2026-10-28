@@ -37,11 +37,37 @@
 - Mỗi người ngồi ghép là một lượt đặt riêng: mã riêng, check-in / hủy / điểm uy tín tính riêng, hiển thị dạng `B01 (ghép #1)`. Sinh viên không thấy tên người ngồi cùng; quản trị viên thấy đủ danh sách.
 - Chống đặt trùng khi nhiều người cùng bấm: khóa duy nhất `uq_seat_place_live` theo từng vị trí, khóa dòng chỗ ngồi (`SELECT … FOR UPDATE`) và việc chọn "bàn nào được mở" chạy tuần tự trên server – 4 người tranh 2 chỗ thì đúng 2 người được.
 
+**Đặt cả bàn phải khai báo người đi cùng** – chặn kiểu đi 1 người mà giữ cả bàn nhiều chỗ:
+- Sinh viên đặt **cả bàn** phải nhập **mã số sinh viên hoặc tên đăng nhập** của những người đi cùng (mỗi người một dòng). Tổng số người (gồm người đặt) ít nhất:
+
+  | Loại bàn | Sức chứa | Ít nhất | Cần khai báo |
+  |---|---|---|---|
+  | Bàn đôi (khu B) | 2 | 2 người | 1 người đi cùng |
+  | Bàn nhóm 4 người (C05–C08) | 4 | 3 người | 2–3 người đi cùng |
+  | Bàn nhóm 6 người (C01–C04) | 6 | 5 người | 4–5 người đi cùng |
+  | Phòng riêng (khu E) | 8 | 7 người | 6–7 người đi cùng |
+
+- Server kiểm tra từng người: phải có tài khoản sinh viên, không phải chính người đặt, **chưa tự đặt chỗ khác** trong ca đó và **chưa được người khác khai báo** ở bàn khác. Người đã được khai báo cũng không tự đặt thêm chỗ khác trong ca đó (một người không giữ 2 chỗ).
+- **Người đi cùng phải xác nhận**: mỗi người nhận **lời mời** (hộp hỏi *Đồng ý đi cùng / Từ chối / Để sau* hiện ngay nếu đang mở ứng dụng; trả lời sau được ở tab *Lịch đặt của tôi*, bảng **Bàn bạn được mời đi cùng**).
+  - Người đặt chỉ **check-in được khi đủ số người đã bấm Đồng ý** (VD bàn 4 chỗ: bạn + ít nhất 2 người đồng ý). Chưa đủ thì server báo đang chờ ai.
+  - Có người **từ chối** → người đặt được báo; nếu không còn đủ người, bàn hiện **THIẾU NGƯỜI** và người đặt bấm **Sửa người đi cùng** để thêm người khác (người giữ lại không phải xác nhận lại, người mới nhận lời mời, người bị bỏ ra được báo). Người đã từ chối được tự đặt chỗ khác trong ca.
+  - Nếu cả nhóm không đến: người đặt bị trừ như bảng dưới, **mỗi người đã bấm Đồng ý bị trừ 10 điểm**; người chưa trả lời hoặc đã từ chối không bị trừ.
+  - **Hạn xác nhận 30 phút, cố định tính từ lúc đặt** (thêm / thay người hay có người từ chối cũng không lùi hạn):
+    - **15 phút sau khi đặt** chưa đủ người đồng ý → máy người đặt hiện hộp nhắc *Sửa người đi cùng* / *Hủy lượt đặt* / *Để sau* (Để sau = đóng hộp, giữ nguyên lượt đặt); mỗi lượt đặt nhắc một lần;
+    - **30 phút sau khi đặt** vẫn chưa đủ → lượt đặt **tự hủy**, bàn được nhả cho người khác; người đặt và người đi cùng được báo. Tự hủy tính như người đặt tự hủy: dưới 60 phút trước giờ vào ca thì −5, còn lại không trừ.
+  - Hạn hiện ngay trong cột *Người đi cùng* (VD `Chờ xác nhận (tự hủy lúc 21:47) - 0/2 đã xác nhận: …`) và trong lời mời ("Hãy trả lời trước 21:47"). Người được thêm / thay vào sau cũng phải trả lời trước hạn đó. Người đặt không mở ứng dụng thì được nhắc khi đăng nhập lại. Lượt đặt sát giờ mà đến giờ check-in vẫn chưa đủ người thì xử lý như không đến.
+  - Trả lời / sửa danh sách được khi lượt đặt còn chờ check-in. Người đi cùng cũng được báo khi bàn bị hủy.
+- Danh sách và trạng thái hiện ở cột **Người đi cùng** (VD `1/2 đã xác nhận: … - đã đồng ý, … - chờ xác nhận`) trong tab *Lịch đặt của tôi* và *QT: Quản lý đặt chỗ*; quản trị viên thấy cả khi rê chuột trên sơ đồ.
+- Đi ít người hơn thì đặt chỗ đơn, hoặc đặt **1 chỗ ngồi ghép** khi bàn mở (không cần khai báo). Quản trị viên đặt tại quầy và quản trị viên check-in hộ không cần người đi cùng xác nhận.
+
 **Điểm uy tín** – hạn chế đặt chỗ rồi không đến. Mỗi tài khoản sinh viên mới bắt đầu với **80 điểm** (tối đa 100):
 
 | Hành vi | Điểm |
 |---|---|
 | Đặt chỗ nhưng không đến / không check-in | −20 |
+| Đặt **cả bàn nhiều chỗ** nhưng không đến | −20, thêm −5 cho mỗi chỗ thêm, tối đa −40 (bàn đôi −25, bàn 4 người −35, bàn 6 người / phòng 8 người −40). Đặt lẻ 1 chỗ ngồi ghép vẫn −20 |
+| Đã bấm **Đồng ý đi cùng** một bàn mà cả nhóm không đến | −10 mỗi người (chưa trả lời / đã từ chối thì không bị trừ) |
+| Lượt đặt cả bàn **tự hủy** vì 30 phút chưa đủ người xác nhận | như tự hủy: −5 nếu dưới 60 phút trước giờ vào ca, còn lại 0 |
 | Hủy lượt đặt dưới 60 phút trước giờ bắt đầu ca | −5 |
 | Check-in đúng hẹn | +5 (tối đa 100) |
 
@@ -70,7 +96,7 @@ Sinh viên xem điểm, mức và lịch sử cộng/trừ ở tab **Điểm uy 
 
 ## 3. Cơ sở dữ liệu MySQL
 
-Database `thuvien_fixbug` (utf8mb4) gồm 5 bảng:
+Database `thuvien_fixbug` (utf8mb4) gồm 8 bảng (5 bảng chính + `reputation_log`, `booking_companions`, `app_meta`):
 
 ```
 users (username PK, full_name, student_id UNIQUE, role, salt, password_hash, created_at,
@@ -83,11 +109,16 @@ bookings (id PK AUTO_INCREMENT,              │ n   ON DELETE CASCADE
           username FK → users,            seats (id PK, zone_id FK → zones, type, capacity,
           full_name, student_id,                 has_outlet, active, note)
           seat_id, zone_id, zone_name,
-          booking_date, slot, status, live, owner_live,
+          booking_date, slot, place, status, live, owner_live,
           walk_in, phone, guest_note,
           created_at, checked_in_at, finished_at, note)
-          UNIQUE uq_seat_live  (seat_id, booking_date, slot, live)
-          UNIQUE uq_owner_live (username, booking_date, slot, owner_live)
+          UNIQUE uq_seat_place_live (seat_id, booking_date, slot, place, live)
+          UNIQUE uq_owner_live      (username, booking_date, slot, owner_live)
+   │ 1
+   │ n   ON DELETE CASCADE
+booking_companions (booking_id FK → bookings, username FK → users,   PK (booking_id, username)
+                    status PENDING / ACCEPTED / DECLINED, responded_at,
+                    invited_at, reminded)
 
 announcements (id PK AUTO_INCREMENT, title, content, author, created_at)
 ```
@@ -96,10 +127,11 @@ announcements (id PK AUTO_INCREMENT, title, content, author, created_at)
 - Cột **`live`** = 1 khi lượt đặt còn hiệu lực (ACTIVE / CHECKED_IN), = NULL khi đã kết thúc. MySQL cho phép nhiều NULL trong UNIQUE KEY, nên `uq_seat_place_live (seat_id, booking_date, slot, place, live)` bảo đảm **ngay trong CSDL**: mỗi vị trí của một chỗ trong một ca chỉ có tối đa 1 lượt còn hiệu lực. Lượt đã hủy vẫn được giữ lại làm lịch sử.
 - Cột **`place`** = 0 khi đặt cả chỗ / cả bàn; = 1, 2, … khi đặt lẻ từng chỗ (ngồi ghép).
 - Cột **`owner_live`** = 1 chỉ với lượt **sinh viên tự đặt** còn hiệu lực → `uq_owner_live` bảo đảm mỗi sinh viên giữ 1 chỗ mỗi ca. Lượt do quản trị viên đặt có `owner_live = NULL` nên không bị giới hạn.
+- **Người đi cùng**: bảng `booking_companions` lưu ai được khai báo đi cùng ở lượt đặt cả bàn nào và họ đã trả lời chưa (`status`: chờ xác nhận / đã đồng ý / đã từ chối, `responded_at`), lúc mời (`invited_at`) và đã nhắc người đặt sau 15 phút chưa (`reminded`); xóa lượt đặt thì tự xóa theo. Khi đặt, server khóa dòng `users` của từng người (`SELECT … FOR UPDATE`) để hai người không cùng lúc khai báo một bạn vào hai bàn; trả lời và sửa danh sách khóa dòng lượt đặt nên xử lý lần lượt.
 - **Đăng nhập Google**: cột `users.google_sub` (mã cố định của tài khoản Google, UNIQUE) và `users.email`.
 - **Điểm uy tín**: cột `users.reputation` (mặc định 80) và `users.locked_until` (ngày hết khóa); mỗi lần cộng/trừ ghi một dòng vào `reputation_log` (lý do, mã lượt đặt) để tra cứu lại.
 - Lượt **đặt tại quầy** (`walk_in = TRUE`): `username` là quản trị viên đã tạo, `full_name` / `student_id` / `phone` / `guest_note` là thông tin sinh viên không có tài khoản.
-- CSDL tạo từ phiên bản trước được **tự nâng cấp** khi chạy server (thêm cột mới, đổi khóa; sinh viên chưa từng được cộng/trừ điểm đưa về mức khởi đầu 80; thêm *Khu học đôi* nếu chưa có bàn đôi và đổi mã khu thành A đơn – B đôi – C nhóm – D máy tính – E phòng riêng, mã chỗ trên lượt đặt cũ đổi theo), dữ liệu cũ giữ nguyên. Các bản cập nhật dữ liệu ghi dấu vào bảng `app_meta` để chỉ chạy một lần (admin xóa khu đôi thì lần sau không bị thêm lại).
+- CSDL tạo từ phiên bản trước được **tự nâng cấp** khi chạy server (thêm cột mới, đổi khóa; sinh viên chưa từng được cộng/trừ điểm đưa về mức khởi đầu 80; thêm *Khu học đôi* nếu chưa có bàn đôi và đổi mã khu thành A đơn – B đôi – C nhóm – D máy tính – E phòng riêng, mã chỗ trên lượt đặt cũ đổi theo; người đi cùng đã khai báo từ bản trước chuyển sang "chờ xác nhận"), dữ liệu cũ giữ nguyên. Các bản cập nhật dữ liệu ghi dấu vào bảng `app_meta` để chỉ chạy một lần (admin xóa khu đôi thì lần sau không bị thêm lại).
 - Mã hiển thị `BK00012` = cột `id` 12 của bảng bookings; `TB0003` = thông báo id 3.
 - Tất cả câu lệnh dùng **PreparedStatement** (chống SQL injection); mọi thao tác ghi chạy trong **transaction** (lỗi giữa chừng → rollback).
 - Server **tự tạo** database, bảng và dữ liệu mẫu khi chạy lần đầu. File `database/thuvien_fixbug.sql` có cùng nội dung để import bằng phpMyAdmin / MySQL Workbench (dùng cho báo cáo hoặc khi tài khoản MySQL không có quyền tạo database).
@@ -148,6 +180,8 @@ announcements (id PK AUTO_INCREMENT, title, content, author, created_at)
 | `lan-discovery` | Trả lời gói UDP tìm server |
 
 **Tiết kiệm tài nguyên – hẹn giờ theo mốc thay vì quét liên tục:** lượt đặt không cần luồng hay bộ đếm giờ riêng. Vì lịch ca cố định, mọi lượt đặt chỉ đổi trạng thái tại **10 mốc mỗi ngày**: 15 phút sau giờ bắt đầu mỗi ca (chưa check-in → tự hủy, trừ điểm uy tín) và giờ kết thúc mỗi ca (→ hoàn thành). Luồng `scheduler` tính mốc kế tiếp (`BookingService.nextDeadline`), "ngủ" tới đúng mốc đó rồi xử lý **tất cả** lượt đến hạn bằng một truy vấn (`ServerThreadPools.scheduleAtMilestones`). Khi khởi động, server chạy bù một lần cho các lượt quá hạn trong lúc server tắt.
+
+**Nhắc 15 phút / tự hủy 30 phút** (người đi cùng chưa xác nhận): giờ phụ thuộc lúc đặt nên không gộp vào mốc ca học được. Khi đặt cả bàn, server chỉ thêm **2 mục hẹn giờ chạy 1 lần** (lúc đặt +15 và +30 phút) vào hàng đợi của luồng `scheduler` (`ServerThreadPools.scheduleOnce`) – không tạo luồng, không quét CSDL trong lúc chờ. Đến giờ, `BookingService.checkCompanions` kiểm tra đúng lượt đặt đó; khởi động lại server thì đọc giờ đặt (`created_at`) và cột `reminded` để hẹn lại (mốc đã qua trong lúc server tắt được chạy ngay).
 
 | | Trước | Sau |
 |---|---|---|
@@ -287,7 +321,8 @@ java -jar dist/FixBug-Server.jar [tùy chọn]
 5. **Hết phiên:** chạy `run-server.bat --session-timeout 1`, để client không thao tác ~1,5 phút → tự về màn hình đăng nhập.
 6. **Đặt tại quầy:** đăng nhập `admin`, bấm một chỗ trống → "Đặt hộ sinh viên không có tài khoản" → nhập họ tên, MSSV, SĐT, ghi chú. Chỗ chuyển đỏ trên mọi máy; tab *QT: Quản lý đặt chỗ* hiện lượt "Tại quầy" kèm thông tin; khi sinh viên đến, bấm *Check-in*.
 7. **Điểm uy tín:** đặt một chỗ ca sắp tới rồi không check-in → sau 15 phút kể từ giờ bắt đầu ca, lượt bị hủy và sinh viên nhận thông báo "−20 điểm uy tín". Tab *Điểm uy tín* hiện lịch sử; admin xem tab *QT: Sinh viên & uy tín* để thấy ai hay không đến và khôi phục điểm khi cần. Tài khoản mới có 80 điểm nên chỉ thấy được hôm nay và ngày mai; check-in đúng hẹn 4 lần (+5 mỗi lần) đạt 100 điểm thì đặt được thêm ngày kia.
-8. **Nội dung:** admin đưa chỗ đã có người đặt vào bảo trì → sinh viên nhận thông báo lượt đặt bị hủy (bảng `bookings`: `status = CANCELLED`, `live = NULL`); admin đăng thông báo → mọi client hiện thông báo mới.
+8. **Người đi cùng:** mở 3 client (`thinh`, `truong`, `bao`). Thịnh bấm bàn C05 (4 chỗ) → hộp khai báo hiện "cần ít nhất 3 người (gồm bạn)". Nhập mỗi `2280603486` → bị yêu cầu nhập thêm; nhập thêm `bao` → đặt được. Máy Trường và Bảo hiện hộp **Lời mời đi cùng**: Trường bấm *Đồng ý*, Bảo bấm *Từ chối* → máy Thịnh báo "Bàn đang THIẾU NGƯỜI"; Thịnh vào *Lịch đặt của tôi* → *Sửa người đi cùng* để thêm người khác. Nếu 15 phút sau khi đặt chưa đủ người đồng ý, máy Thịnh hiện hộp nhắc; 30 phút sau khi đặt thì lượt đặt tự hủy. Đến giờ, Thịnh chỉ check-in được khi đủ người đã đồng ý.
+9. **Nội dung:** admin đưa chỗ đã có người đặt vào bảo trì → sinh viên nhận thông báo lượt đặt bị hủy (bảng `bookings`: `status = CANCELLED`, `live = NULL`); admin đăng thông báo → mọi client hiện thông báo mới.
 
 ---
 
@@ -295,7 +330,7 @@ java -jar dist/FixBug-Server.jar [tùy chọn]
 
 | Lỗi | Cách xử lý | Vị trí |
 |---|---|---|
-| Hai người đặt trùng một chỗ (race condition) | Transaction + `UNIQUE KEY uq_seat_live` trong MySQL làm chốt chặn cuối | `BookingService.book`, `Schema` |
+| Hai người đặt trùng một chỗ (race condition) | Transaction + `UNIQUE KEY uq_seat_place_live` trong MySQL làm chốt chặn cuối | `BookingService.book`, `Schema` |
 | SQL injection | Chỉ dùng `PreparedStatement` với tham số `?` | `server/db/*Dao` |
 | Lỗi giữa chừng để lại dữ liệu dở dang | Transaction: commit khi xong, rollback khi lỗi (kể cả lỗi nghiệp vụ) | `Database.tx` |
 | Mở kết nối CSDL mỗi yêu cầu (chậm), hoặc quá nhiều kết nối làm sập MySQL | Pool kết nối có giới hạn, luồng chờ khi hết kết nối | `ConnectionPool` |
@@ -343,4 +378,6 @@ LibraryBooking/
 | Quản trị lượt đặt ![](docs/screenshots/06_admin_bookings.png) | Phiên đăng nhập & thống kê luồng ![](docs/screenshots/07_admin_sessions_threads.png) |
 | Quản trị viên đặt hộ sinh viên tại quầy ![](docs/screenshots/08_admin_walkin_dialog.png) | Danh sách lượt đặt tại quầy ![](docs/screenshots/09_admin_walkin_list.png) |
 | Điểm uy tín của sinh viên ![](docs/screenshots/10_student_reputation.png) | Quản trị sinh viên & uy tín ![](docs/screenshots/11_admin_students_reputation.png) |
-| Đặt lẻ / ngồi ghép khi khu đơn đã kín ![](docs/screenshots/12_share_seats.png) | |
+| Đặt lẻ / ngồi ghép khi khu đơn đã kín ![](docs/screenshots/12_share_seats.png) | Đặt cả bàn: khai báo người đi cùng ![](docs/screenshots/13_companions.png) |
+| Lời mời đi cùng: Đồng ý / Từ chối ![](docs/screenshots/15_companion_invite.png) | Bàn được mời đi cùng (tab Lịch đặt của tôi) ![](docs/screenshots/16_invites_table.png) |
+| Có người từ chối → Sửa người đi cùng ![](docs/screenshots/17_edit_companions.png) | 15 phút chưa đủ người xác nhận: nhắc người đặt (30 phút tự hủy) ![](docs/screenshots/18_companion_reminder.png) |

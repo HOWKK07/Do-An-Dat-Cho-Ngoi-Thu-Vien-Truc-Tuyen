@@ -37,6 +37,7 @@ public class MainFrame extends JFrame implements ServerConnection.Listener {
     private final JLabel statusLabel = new JLabel();
     private final BookingPanel bookingPanel;
     private final MyBookingsPanel myBookingsPanel;
+    private JTabbedPane tabs;
     private final AnnouncementsPanel announcementsPanel;
     private BookingAdminPanel bookingAdminPanel;
     private SystemAdminPanel systemAdminPanel;
@@ -55,7 +56,7 @@ public class MainFrame extends JFrame implements ServerConnection.Listener {
         myBookingsPanel = new MyBookingsPanel(ctx);
         announcementsPanel = new AnnouncementsPanel(ctx);
 
-        JTabbedPane tabs = new JTabbedPane();
+        tabs = new JTabbedPane();
         tabs.setFont(UiKit.font(Font.BOLD, 13f));
         tabs.addTab("Đặt chỗ học", bookingPanel);
         tabs.addTab("Lịch đặt của tôi", myBookingsPanel);
@@ -237,6 +238,12 @@ public class MainFrame extends JFrame implements ServerConnection.Listener {
                 bookingPanel.requestRefresh();
                 reloadReputation();
                 break;
+            case COMPANION_INVITE:
+                showInvite(e);
+                break;
+            case COMPANION_REMINDER:
+                showReminder(e);
+                break;
             case REPUTATION_CHANGED:
                 Toast.show(this, e.getText(), UiKit.PRIMARY);
                 reloadReputation();
@@ -251,6 +258,40 @@ public class MainFrame extends JFrame implements ServerConnection.Listener {
                 break;
             default:
                 break;
+        }
+    }
+
+    /** Quá 30 phút người đi cùng chưa xác nhận đủ: hỏi người đặt muốn thêm / thay người hay hủy lượt đặt. */
+    private void showReminder(Message e) {
+        myBookingsPanel.reload();
+        String bookingId = e.getString("bookingId");
+        Object[] options = {"Sửa người đi cùng", "Hủy lượt đặt", "Để sau"};
+        int pick = JOptionPane.showOptionDialog(this, "<html><div style='width:380px'>" + UiKit.html(e.getText())
+                        + "</div></html>", "Chưa đủ người xác nhận đi cùng", JOptionPane.DEFAULT_OPTION,
+                JOptionPane.WARNING_MESSAGE, null, options, options[0]);
+        if (ended || pick < 0 || pick > 1) {
+            return;
+        }
+        tabs.setSelectedComponent(myBookingsPanel);
+        myBookingsPanel.handleReminder(bookingId, pick == 1);
+    }
+
+    /** Có người khai báo mình đi cùng khi đặt cả bàn: hỏi ngay Đồng ý / Từ chối (hoặc để trả lời sau). */
+    private void showInvite(Message e) {
+        myBookingsPanel.reload();
+        String bookingId = e.getString("bookingId");
+        Object[] options = {"Đồng ý đi cùng", "Từ chối", "Để sau"};
+        int pick = JOptionPane.showOptionDialog(this, "<html><div style='width:360px'>" + UiKit.html(e.getText())
+                        + "</div></html>", "Lời mời đi cùng", JOptionPane.DEFAULT_OPTION, JOptionPane.QUESTION_MESSAGE,
+                null, options, options[0]);
+        if (ended) {
+            return;
+        }
+        if (pick == 0 || pick == 1) {
+            myBookingsPanel.respondInvite(bookingId, pick == 0);
+        } else {
+            Toast.show(this, "Bạn có thể trả lời sau ở tab \"Lịch đặt của tôi\" (bảng Bàn bạn được mời đi cùng).",
+                    UiKit.INFO);
         }
     }
 

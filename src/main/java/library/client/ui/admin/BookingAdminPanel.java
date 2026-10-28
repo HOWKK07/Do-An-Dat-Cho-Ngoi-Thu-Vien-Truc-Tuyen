@@ -54,6 +54,7 @@ public class BookingAdminPanel extends JPanel {
             .col("Ngày", LocalDate.class, Booking::getDate)
             .col("Ca", Integer.class, Booking::getSlot)
             .col("Chỗ", Booking::getSeatLabel)
+            .col("Người đi cùng", Booking::getCompanionsLabel)
             .col("Trạng thái", BookingStatus.class, Booking::getStatus)
             .col("SĐT", Booking::getPhone)
             .col("Ghi chú SV", Booking::getGuestNote)
@@ -139,9 +140,10 @@ public class BookingAdminPanel extends JPanel {
         table.getColumnModel().getColumn(3).setPreferredWidth(70);
         table.getColumnModel().getColumn(4).setPreferredWidth(130);
         table.getColumnModel().getColumn(5).setPreferredWidth(30);
-        table.getColumnModel().getColumn(6).setPreferredWidth(45);
-        table.getColumnModel().getColumn(9).setPreferredWidth(160);
-        table.getColumnModel().getColumn(12).setPreferredWidth(200);
+        table.getColumnModel().getColumn(6).setPreferredWidth(85);
+        table.getColumnModel().getColumn(7).setPreferredWidth(220);   // Người đi cùng
+        table.getColumnModel().getColumn(10).setPreferredWidth(160);
+        table.getColumnModel().getColumn(13).setPreferredWidth(200);
 
         JLabel hint = UiKit.label("Đặt chỗ hộ sinh viên không có tài khoản: vào tab \"Đặt chỗ học\", chọn ngày/ca rồi "
                 + "bấm vào một chỗ màu xanh lá. Tìm theo tên, MSSV, SĐT, mã chỗ hoặc mã đặt chỗ.",

@@ -113,6 +113,7 @@ public class StudentAdminPanel extends JPanel {
         add(bar, BorderLayout.NORTH);
         add(new JScrollPane(table), BorderLayout.CENTER);
         add(UiKit.label("Sắp xếp theo điểm từ thấp đến cao. Không đến: −" + Reputation.NO_SHOW_PENALTY
+                + " (cả bàn nhiều chỗ: tới −" + Reputation.NO_SHOW_MAX_PENALTY + ")"
                 + ", hủy sát giờ: −" + Reputation.LATE_CANCEL_PENALTY + ", check-in đúng hẹn: +"
                 + Reputation.CHECK_IN_REWARD + ". Dưới " + Reputation.LOCK_BELOW + " điểm bị tạm khóa đặt chỗ "
                 + Reputation.LOCK_DAYS + " ngày.", Font.PLAIN, 12f, UiKit.MUTED), BorderLayout.SOUTH);

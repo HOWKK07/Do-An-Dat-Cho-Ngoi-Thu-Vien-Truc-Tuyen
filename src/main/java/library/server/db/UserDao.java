@@ -144,6 +144,25 @@ public final class UserDao {
         }
     }
 
+    /**
+     * Tìm tài khoản theo tên đăng nhập HOẶC mã số sinh viên và KHÓA dòng đó tới hết transaction (dùng khi khai báo
+     * người đi cùng: tránh cùng lúc người đó vừa được khai báo vừa tự đặt chỗ khác).
+     */
+    public static UserRecord findByUsernameOrStudentIdForUpdate(Connection c, String ident) throws SQLException {
+        try (PreparedStatement ps = c.prepareStatement("SELECT username, full_name, student_id, role, salt, "
+                + "password_hash FROM users WHERE username = ? OR student_id = ? FOR UPDATE")) {
+            ps.setString(1, ident.toLowerCase());
+            ps.setString(2, ident);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (!rs.next()) {
+                    return null;
+                }
+                return new UserRecord(rs.getString(1), rs.getString(2), rs.getString(3),
+                        Role.valueOf(rs.getString(4)), rs.getString(5), rs.getString(6));
+            }
+        }
+    }
+
     /** Tài khoản đã liên kết với tài khoản Google có mã {@code sub}, hoặc null. */
     public static UserRecord findByGoogleSub(Connection c, String sub) throws SQLException {
         try (PreparedStatement ps = c.prepareStatement(

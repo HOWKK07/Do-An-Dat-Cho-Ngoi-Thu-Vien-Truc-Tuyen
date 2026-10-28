@@ -39,8 +39,20 @@ public final class Protocol {
     public static final int BOOKING_DAYS_AHEAD = 3;
     /** Quản trị viên không giới hạn số lượt nhưng cũng chỉ đặt trước tối đa 3 ngày như quy định của thư viện. */
     public static final int ADMIN_BOOKING_DAYS_AHEAD = BOOKING_DAYS_AHEAD;
+    /**
+     * Đặt CẢ bàn nhiều chỗ phải có tối thiểu (số chỗ − 1) người, ít nhất 2 - gồm cả người đặt:
+     * bàn đôi 2, bàn 4 người 3, bàn 6 người 5, phòng 8 người 7. Người đặt khai báo những người đi cùng.
+     */
+    public static int minPeopleForTable(int capacity) {
+        return capacity <= 1 ? 1 : Math.max(2, capacity - 1);
+    }
+
     public static final int CHECKIN_EARLY_MINUTES = 15;
     public static final int CHECKIN_LATE_MINUTES = 15;
+    /** Đặt cả bàn: sau từng này phút (tính từ lúc đặt) chưa đủ người xác nhận đi cùng → nhắc người đặt. */
+    public static final int COMPANION_REMIND_MINUTES = 15;
+    /** ... sau từng này phút (tính từ lúc đặt, cố định) vẫn chưa đủ người xác nhận → lượt đặt tự hủy. */
+    public static final int COMPANION_CONFIRM_MINUTES = 30;
 
     /**
      * Chỉ cho phép giải tuần tự hóa các lớp của ứng dụng và lớp chuẩn của JDK.

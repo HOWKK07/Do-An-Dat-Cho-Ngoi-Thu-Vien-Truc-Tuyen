@@ -15,6 +15,7 @@ import library.common.ReputationInfo;
 import library.server.service.BookingService;
 import library.server.service.ReputationService;
 import library.server.service.ContentService;
+import library.server.service.CompanionException;
 import library.server.service.ServiceException;
 import library.server.service.UserService;
 import library.server.session.Session;
@@ -67,6 +68,8 @@ public class RequestHandler {
                 return Message.error(req, "Bạn không có quyền thực hiện chức năng này.");
             }
             return handleAuthenticated(req, cmd, session, user);
+        } catch (CompanionException e) {
+            return Message.error(req, e.getMessage()).put("companionError", true);
         } catch (ServiceException e) {
             return Message.error(req, e.getMessage());
         } catch (DbException e) {
@@ -179,10 +182,15 @@ public class RequestHandler {
 
             case BOOK_SEAT: {
                 LocalDate date = req.get("date");
+                String rawCompanions = req.getString("companions");
+                List<String> companions = rawCompanions == null ? null
+                        : java.util.Arrays.asList(rawCompanions.split("[,;\\s]+"));
                 Booking b = bookings.book(user, req.getString("seatId"), date, req.getInt("slot", 0),
-                        req.getBool("onePlace"));
+                        req.getBool("onePlace"), companions);
                 return Message.ok(req, "Đặt chỗ thành công! Mã đặt chỗ: " + b.getId()
                         + (b.isSharedPlace() ? "\nBạn ngồi ghép bàn " + b.getSeatId() + ", vị trí #" + b.getPlace() + "." : "")
+                        + (b.getCompanions().isEmpty() ? "" : "\nĐã gửi lời mời đi cùng tới: " + b.getCompanionNames()
+                        + ".\nHọ cần bấm \"Đồng ý\" trong ứng dụng thì bàn mới đủ người để check-in.")
                         + "\nNhớ check-in trong khoảng 15 phút trước/sau giờ bắt đầu ca.").put("booking", b);
             }
 
@@ -204,7 +212,26 @@ public class RequestHandler {
             }
 
             case GET_MY_BOOKINGS:
-                return Message.ok(req).putList("bookings", bookings.myBookings(user.getUsername()));
+                return Message.ok(req).putList("bookings", bookings.myBookings(user.getUsername()))
+                        .putList("invites", bookings.companionInvites(user.getUsername()));
+
+            case RESPOND_COMPANION: {
+                boolean accept = req.getBool("accept");
+                Booking b = bookings.respondCompanion(user, req.getString("bookingId"), accept);
+                return Message.ok(req, accept
+                        ? "Bạn đã đồng ý đi cùng " + b.getFullName() + " ở " + b.describe() + ". Nhớ đến đúng giờ!"
+                        : "Bạn đã từ chối đi cùng " + b.getFullName() + ". Bạn có thể tự đặt chỗ khác trong ca này.")
+                        .put("booking", b);
+            }
+
+            case UPDATE_COMPANIONS: {
+                String raw = req.getString("companions");
+                Booking b = bookings.updateCompanions(user, req.getString("bookingId"),
+                        raw == null ? null : java.util.Arrays.asList(raw.split("[,;\\s]+")));
+                return Message.ok(req, "Đã cập nhật người đi cùng lượt " + b.getId() + ": " + b.getCompanionsLabel()
+                        + (b.isCompanionsReady() ? "" : "\nNgười mới được mời cần bấm \"Đồng ý\" trong ứng dụng."))
+                        .put("booking", b);
+            }
 
             case GET_ANNOUNCEMENTS:
                 return Message.ok(req).putList("announcements", content.listAnnouncements());

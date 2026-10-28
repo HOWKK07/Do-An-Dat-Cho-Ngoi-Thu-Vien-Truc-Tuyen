@@ -109,6 +109,20 @@ public final class Schema {
                     + "  created_at DATETIME     NOT NULL\n"
                     + ")" + OPTIONS,
 
+            // Người đi cùng khi đặt cả bàn nhiều chỗ (bàn đôi / nhóm / phòng) và việc họ xác nhận lời mời
+            "CREATE TABLE IF NOT EXISTS booking_companions (\n"
+                    + "  booking_id   INT          NOT NULL,\n"
+                    + "  username     VARCHAR(20)  NOT NULL,\n"
+                    + "  status       VARCHAR(10)  NOT NULL DEFAULT 'PENDING',\n"
+                    + "  responded_at DATETIME     NULL,\n"
+                    + "  invited_at   DATETIME     NULL,\n"
+                    + "  reminded     BOOLEAN      NOT NULL DEFAULT FALSE,\n"
+                    + "  PRIMARY KEY (booking_id, username),\n"
+                    + "  KEY idx_companion_user (username),\n"
+                    + "  CONSTRAINT fk_companion_booking FOREIGN KEY (booking_id) REFERENCES bookings(id) ON DELETE CASCADE,\n"
+                    + "  CONSTRAINT fk_companion_user FOREIGN KEY (username) REFERENCES users(username)\n"
+                    + ")" + OPTIONS,
+
             // Đánh dấu các bản cập nhật dữ liệu đã chạy (mỗi bản chỉ chạy một lần)
             "CREATE TABLE IF NOT EXISTS app_meta (\n"
                     + "  meta_key   VARCHAR(50)  NOT NULL PRIMARY KEY,\n"
@@ -138,6 +152,24 @@ public final class Schema {
     static boolean migrate(Connection c) throws SQLException {
         boolean changed = false;
         try (Statement st = c.createStatement()) {
+            // v7: người đi cùng phải xác nhận lời mời (PENDING → ACCEPTED / DECLINED)
+            if (!hasColumn(c, "booking_companions", "status")) {
+                st.executeUpdate("ALTER TABLE booking_companions ADD COLUMN status VARCHAR(10) NOT NULL DEFAULT 'PENDING'");
+                changed = true;
+            }
+            if (!hasColumn(c, "booking_companions", "responded_at")) {
+                st.executeUpdate("ALTER TABLE booking_companions ADD COLUMN responded_at DATETIME NULL");
+                changed = true;
+            }
+            // v8: nhắc người đặt khi quá 30 phút người đi cùng chưa xác nhận
+            if (!hasColumn(c, "booking_companions", "invited_at")) {
+                st.executeUpdate("ALTER TABLE booking_companions ADD COLUMN invited_at DATETIME NULL");
+                changed = true;
+            }
+            if (!hasColumn(c, "booking_companions", "reminded")) {
+                st.executeUpdate("ALTER TABLE booking_companions ADD COLUMN reminded BOOLEAN NOT NULL DEFAULT FALSE");
+                changed = true;
+            }
             // v6: đăng nhập bằng Google (google_sub = mã định danh cố định của tài khoản Google)
             if (!hasColumn(c, "users", "email")) {
                 st.executeUpdate("ALTER TABLE users ADD COLUMN email VARCHAR(120) NULL");
