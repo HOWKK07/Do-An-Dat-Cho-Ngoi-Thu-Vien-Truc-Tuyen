@@ -1,4 +1,4 @@
-# Thư viện Fix Bug – Hệ thống đặt chỗ học tại thư viện trực tuyến (Java + MySQL)
+# Thư viện Fixbug – Hệ thống đặt chỗ học tại thư viện trực tuyến (Java + MySQL)
 
 **Nhóm thực hiện: Fix Bug**
 
@@ -14,7 +14,7 @@
 |---|---|---|---|---|
 | 1 | Nguyễn Văn Thịnh | 2280603107 | **Quản lý nội dung, chỗ ngồi và booking** (kèm thiết kế CSDL, điểm uy tín) | `server/service/ContentService`, `BookingService`, `ReputationService`, `server/db/ReputationDao`, `common/Reputation`, `client/ui/ReputationPanel`, `client/ui/admin/StudentAdminPanel`, `server/db/Schema`, `ZoneDao`, `SeatDao`, `BookingDao`, `AnnouncementDao`, `DataSeeder`, `database/thuvien_fixbug.sql`, `common/*` (Zone, Seat, Booking, SeatMap…), `client/ui/BookingPanel`, `SeatButton`, `MyBookingsPanel`, `AnnouncementsPanel`, `client/ui/admin/ZoneSeatAdminPanel`, `BookingAdminPanel` |
 | 2 | Nguyễn Đan Trường | 2280603486 | **Quản lý luồng, phân luồng** | `server/thread/ServerThreadPools`, `NamedThreadFactory`, `EventBroadcaster`, `server/LibraryServer` (vòng accept), `server/ClientHandler`, `server/db/ConnectionPool` (pool kết nối MySQL dùng chung giữa các luồng), `server/db/Database` (transaction, thử lại khi deadlock), `client/net/ServerConnection` (luồng đọc, heartbeat, CompletableFuture), `tools/StressTest` |
-| 3 | Chu Nguyễn Gia Bảo | 2380600118 | **Tối ưu quản lý session, mạng LAN** | `server/session/Session`, `SessionManager`, `server/net/DiscoveryResponder`, `client/net/ServerDiscovery`, cơ chế tự kết nối lại + RESUME trong `ServerConnection`, `server/service/UserService` + `server/db/UserDao` (đăng nhập, khóa khi sai mật khẩu), `client/ui/admin/SystemAdminPanel`, `server/ui/ServerFrame`, bộ lọc `ObjectInputFilter` trong `common/Protocol` |
+| 3 | Chu Nguyễn Gia Bảo | 2380600118 | **Tối ưu quản lý session, mạng LAN** | `server/session/Session`, `SessionManager`, `server/net/DiscoveryResponder`, `client/net/ServerDiscovery`, cơ chế tự kết nối lại + RESUME trong `ServerConnection`, `server/service/UserService` + `server/db/UserDao` (đăng nhập, khóa khi sai mật khẩu), `client/ui/admin/SystemAdminPanel`, `server/ui/ServerFrame`, bộ lọc `ObjectInputFilter` trong `common/Protocol`, **đăng nhập Google**: `server/auth/GoogleAuthService`, `GoogleConfig`, `Json`, `client/net/GoogleSignIn`, `client/ui/GoogleLinkDialog` |
 
 ---
 
@@ -28,6 +28,14 @@
 - Nhận thông báo tức thì: thông báo mới của thư viện, lượt đặt bị hủy/quá hạn.
 
 **Quy định nghiệp vụ** (kiểm tra ở server): tối đa 3 ca/ngày; mỗi ca chỉ giữ 1 chỗ; thư viện chỉ cho đặt trước tối đa 3 ngày (tính cả hôm nay, cần 100 điểm uy tín – xem bảng dưới); check-in mở từ 15 phút trước giờ bắt đầu ca (chưa đến ca thì không check-in được); không check-in đúng giờ → hệ thống tự hủy để nhường chỗ; hết ca → tự hoàn thành.
+
+**Đặt lẻ / ngồi ghép** – tận dụng bàn nhiều chỗ khi khu chỗ đơn đã kín:
+- Bình thường bàn đôi, bàn nhóm, phòng riêng được đặt **cả bàn** (một lượt giữ cả bàn).
+- Khi **mọi chỗ đơn (khu A) trong ca đã có người**, hệ thống **mở một bàn** cho đặt lẻ từng chỗ (ô màu vàng): sinh viên đặt 1 chỗ và ngồi ghép với người khác, hoặc vẫn có thể đặt cả bàn nếu bàn chưa ai ngồi.
+- **Bàn đó đủ người thì mới mở bàn tiếp theo**, theo thứ tự: bàn đôi B01 → B10, rồi bàn nhóm (khu C), rồi phòng riêng (khu E). Máy tính (khu D) là chỗ 1 người nên không áp dụng.
+- Bàn đã có người ngồi ghép mà còn chỗ thì vẫn nhận thêm cho đủ bàn (kể cả khi khu đơn vừa có người hủy), và không đặt cả bàn được nữa.
+- Mỗi người ngồi ghép là một lượt đặt riêng: mã riêng, check-in / hủy / điểm uy tín tính riêng, hiển thị dạng `B01 (ghép #1)`. Sinh viên không thấy tên người ngồi cùng; quản trị viên thấy đủ danh sách.
+- Chống đặt trùng khi nhiều người cùng bấm: khóa duy nhất `uq_seat_place_live` theo từng vị trí, khóa dòng chỗ ngồi (`SELECT … FOR UPDATE`) và việc chọn "bàn nào được mở" chạy tuần tự trên server – 4 người tranh 2 chỗ thì đúng 2 người được.
 
 **Điểm uy tín** – hạn chế đặt chỗ rồi không đến. Mỗi tài khoản sinh viên mới bắt đầu với **80 điểm** (tối đa 100):
 
@@ -85,11 +93,13 @@ announcements (id PK AUTO_INCREMENT, title, content, author, created_at)
 ```
 
 - Mật khẩu **không lưu dạng rõ**: băm PBKDF2-SHA256 + salt ngẫu nhiên.
-- Cột **`live`** = 1 khi lượt đặt còn hiệu lực (ACTIVE / CHECKED_IN), = NULL khi đã kết thúc. MySQL cho phép nhiều NULL trong UNIQUE KEY, nên `uq_seat_live` bảo đảm **ngay trong CSDL**: một chỗ trong một ca chỉ có tối đa 1 lượt còn hiệu lực. Lượt đã hủy vẫn được giữ lại làm lịch sử.
+- Cột **`live`** = 1 khi lượt đặt còn hiệu lực (ACTIVE / CHECKED_IN), = NULL khi đã kết thúc. MySQL cho phép nhiều NULL trong UNIQUE KEY, nên `uq_seat_place_live (seat_id, booking_date, slot, place, live)` bảo đảm **ngay trong CSDL**: mỗi vị trí của một chỗ trong một ca chỉ có tối đa 1 lượt còn hiệu lực. Lượt đã hủy vẫn được giữ lại làm lịch sử.
+- Cột **`place`** = 0 khi đặt cả chỗ / cả bàn; = 1, 2, … khi đặt lẻ từng chỗ (ngồi ghép).
 - Cột **`owner_live`** = 1 chỉ với lượt **sinh viên tự đặt** còn hiệu lực → `uq_owner_live` bảo đảm mỗi sinh viên giữ 1 chỗ mỗi ca. Lượt do quản trị viên đặt có `owner_live = NULL` nên không bị giới hạn.
+- **Đăng nhập Google**: cột `users.google_sub` (mã cố định của tài khoản Google, UNIQUE) và `users.email`.
 - **Điểm uy tín**: cột `users.reputation` (mặc định 80) và `users.locked_until` (ngày hết khóa); mỗi lần cộng/trừ ghi một dòng vào `reputation_log` (lý do, mã lượt đặt) để tra cứu lại.
 - Lượt **đặt tại quầy** (`walk_in = TRUE`): `username` là quản trị viên đã tạo, `full_name` / `student_id` / `phone` / `guest_note` là thông tin sinh viên không có tài khoản.
-- CSDL tạo từ phiên bản trước được **tự nâng cấp** khi chạy server (thêm cột mới, đổi khóa; sinh viên chưa từng được cộng/trừ điểm đưa về mức khởi đầu 80), dữ liệu cũ giữ nguyên.
+- CSDL tạo từ phiên bản trước được **tự nâng cấp** khi chạy server (thêm cột mới, đổi khóa; sinh viên chưa từng được cộng/trừ điểm đưa về mức khởi đầu 80; thêm *Khu học đôi* nếu chưa có bàn đôi và đổi mã khu thành A đơn – B đôi – C nhóm – D máy tính – E phòng riêng, mã chỗ trên lượt đặt cũ đổi theo), dữ liệu cũ giữ nguyên. Các bản cập nhật dữ liệu ghi dấu vào bảng `app_meta` để chỉ chạy một lần (admin xóa khu đôi thì lần sau không bị thêm lại).
 - Mã hiển thị `BK00012` = cột `id` 12 của bảng bookings; `TB0003` = thông báo id 3.
 - Tất cả câu lệnh dùng **PreparedStatement** (chống SQL injection); mọi thao tác ghi chạy trong **transaction** (lỗi giữa chừng → rollback).
 - Server **tự tạo** database, bảng và dữ liệu mẫu khi chạy lần đầu. File `database/thuvien_fixbug.sql` có cùng nội dung để import bằng phpMyAdmin / MySQL Workbench (dùng cho báo cáo hoặc khi tài khoản MySQL không có quyền tạo database).
@@ -203,9 +213,38 @@ Linux/macOS: `./build.sh`, `./run-server.sh`, `./run-client.sh`.
 | `truong` | `123456` | Sinh viên – Nguyễn Đan Trường |
 | `bao` | `123456` | Sinh viên – Chu Nguyễn Gia Bảo |
 
+### Khu vực & chỗ ngồi mẫu
+| Khu | Tên | Chỗ |
+|---|---|---|
+| A | Khu đọc yên tĩnh (tầng 1) | A01–A20: chỗ đơn, A01–A10 có ổ cắm |
+| B | Khu học đôi (tầng 1) | B01–B10: **bàn đôi 2 người**, có ổ cắm |
+| C | Khu học nhóm (tầng 2) | C01–C04: bàn 6 người, C05–C08: bàn 4 người |
+| D | Khu máy tính (tầng 2) | D01–D12: máy tính |
+| E | Phòng học riêng (tầng 3) | E01–E04: phòng 8 người |
+
+Sơ đồ chỗ, ô chọn khu vực và bảng quản trị đều xếp các khu **theo tầng, rồi theo mã khu**, nên khu đôi B (tầng 1) nằm ngay dưới khu chỗ đơn A. Muốn đổi thứ tự thì quản trị viên sửa số tầng của khu.
+
 Muốn quay về dữ liệu mẫu: trong phpMyAdmin xóa (Drop) database `thuvien_fixbug` rồi chạy lại server.
 
 Tên nhóm / tên thư viện hiển thị được khai báo một chỗ duy nhất: hằng `GROUP_NAME` trong `src/main/java/library/common/Protocol.java`.
+
+### Đăng nhập bằng Google (tùy chọn)
+Màn hình đăng nhập có nút **"Đăng nhập bằng Google"**. Nút chỉ hoạt động sau khi server được cấu hình:
+
+1. Vào <https://console.cloud.google.com>, tạo (hoặc chọn) một project.
+2. **APIs & Services → OAuth consent screen**: chọn *External*, điền tên ứng dụng và email hỗ trợ. Ở mục **Test users**, thêm Gmail của những người được phép đăng nhập (khi ứng dụng còn ở chế độ *Testing*, chỉ các email này đăng nhập được).
+3. **APIs & Services → Credentials → Create credentials → OAuth client ID**, chọn *Application type* = **Desktop app**.
+4. Chạy server một lần để server tự tạo file **`google.properties`** cạnh `db.properties`. Dán *Client ID* và *Client secret* vào file đó rồi chạy lại server. Log sẽ báo *"Đăng nhập bằng Google: ĐÃ BẬT"*.
+   - Có thể đặt `google.allowedDomain=hutech.edu.vn` (ví dụ) để chỉ cho email trường đăng nhập.
+   - `google.properties` chứa khóa bí mật nên đã có trong `.gitignore`, **không đưa lên GitHub**.
+
+Cách hoạt động (OAuth 2.0 cho ứng dụng máy tính, luồng *loopback* + **PKCE**):
+1. Client hỏi server Client ID, mở một cổng tạm trên `127.0.0.1` rồi mở trình duyệt tới trang đăng nhập Google.
+2. Người dùng chọn tài khoản. Google chuyển trình duyệt về `http://127.0.0.1:<cổng>/?code=…` và client nhận được **mã xác thực**.
+3. Client gửi mã + `code_verifier` lên server. **Server** (giữ *Client secret*, client không bao giờ biết) đổi mã lấy *ID token* tại Google, rồi kiểm tra nơi phát hành (`iss`), ứng dụng nhận (`aud`), hạn dùng (`exp`) và email đã xác minh.
+4. Tài khoản Google đã liên kết thì đăng nhập luôn. Lần đầu, ứng dụng hỏi **tạo tài khoản sinh viên mới** (điền MSSV) hoặc **liên kết với tài khoản đã có** (nhập mật khẩu tài khoản đó). Liên kết lưu theo mã cố định của tài khoản Google (`users.google_sub`), nên đổi email Gmail vẫn đăng nhập được.
+
+Máy chạy **server** cần Internet (để gọi Google). Máy **client** cần trình duyệt.
 
 ### Lỗi thường gặp khi kết nối MySQL
 | Thông báo | Cách xử lý |
@@ -225,7 +264,7 @@ java -jar dist/FixBug-Server.jar [tùy chọn]
   --session-timeout N   Phút không thao tác thì hết phiên (mặc định 30)
   --reconnect-grace N   Giây giữ phiên khi client rớt mạng (mặc định 120)
   --db-config FILE      File cấu hình MySQL (mặc định ./db.properties)
-  --name TÊN            Tên server hiển thị khi client tìm trong LAN
+  --name TÊN            Tên server hiển thị khi client tìm trong LAN (mặc định: Fixbug)
   --nogui               Chạy dòng lệnh (lệnh: stats, sessions, kick S0001, stop)
 ```
 
@@ -280,7 +319,7 @@ java -jar dist/FixBug-Server.jar [tùy chọn]
 LibraryBooking/
 ├── src/main/java/library/
 │   ├── common/          Lớp dùng chung (Message, Command, Zone, Seat, Booking, TimeSlot…)
-│   ├── server/          Máy chủ (+ db/, service/, thread/, session/, net/, ui/)
+│   ├── server/          Máy chủ (+ db/, service/, thread/, session/, net/, ui/, auth/)
 │   ├── client/          Ứng dụng người dùng (net/, ui/, ui/admin/)
 │   └── tools/           StressTest
 ├── database/            thuvien_fixbug.sql (tạo bảng + dữ liệu mẫu)
@@ -304,3 +343,4 @@ LibraryBooking/
 | Quản trị lượt đặt ![](docs/screenshots/06_admin_bookings.png) | Phiên đăng nhập & thống kê luồng ![](docs/screenshots/07_admin_sessions_threads.png) |
 | Quản trị viên đặt hộ sinh viên tại quầy ![](docs/screenshots/08_admin_walkin_dialog.png) | Danh sách lượt đặt tại quầy ![](docs/screenshots/09_admin_walkin_list.png) |
 | Điểm uy tín của sinh viên ![](docs/screenshots/10_student_reputation.png) | Quản trị sinh viên & uy tín ![](docs/screenshots/11_admin_students_reputation.png) |
+| Đặt lẻ / ngồi ghép khi khu đơn đã kín ![](docs/screenshots/12_share_seats.png) | |

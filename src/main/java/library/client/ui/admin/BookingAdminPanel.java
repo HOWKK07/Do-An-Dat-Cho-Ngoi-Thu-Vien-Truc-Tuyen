@@ -53,7 +53,7 @@ public class BookingAdminPanel extends JPanel {
             .col("Hình thức", b -> b.isWalkIn() ? "Tại quầy" : "Tự đặt")
             .col("Ngày", LocalDate.class, Booking::getDate)
             .col("Ca", Integer.class, Booking::getSlot)
-            .col("Chỗ", Booking::getSeatId)
+            .col("Chỗ", Booking::getSeatLabel)
             .col("Trạng thái", BookingStatus.class, Booking::getStatus)
             .col("SĐT", Booking::getPhone)
             .col("Ghi chú SV", Booking::getGuestNote)

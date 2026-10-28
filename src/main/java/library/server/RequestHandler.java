@@ -8,6 +8,8 @@ import library.common.Seat;
 import library.common.SeatType;
 import library.common.UserInfo;
 import library.common.Zone;
+import library.server.auth.GoogleAuthService;
+import library.server.auth.GoogleIdentity;
 import library.server.db.DbException;
 import library.common.ReputationInfo;
 import library.server.service.BookingService;
@@ -32,6 +34,7 @@ public class RequestHandler {
     private final ContentService content;
     private final BookingService bookings;
     private final ReputationService reputation;
+    private final GoogleAuthService google;
 
     public RequestHandler(LibraryServer server) {
         this.server = server;
@@ -40,6 +43,7 @@ public class RequestHandler {
         this.content = server.getContent();
         this.bookings = server.getBookings();
         this.reputation = server.getReputation();
+        this.google = server.getGoogle();
     }
 
     public Message handle(ClientHandler client, Message req) {
@@ -84,13 +88,42 @@ public class RequestHandler {
             case LOGIN: {
                 UserInfo user = users.authenticate(req.getString("username"), req.getString("password"),
                         client.getRemoteIp());
-                Session s = sessions.login(user, client);
-                Log.info("%s đăng nhập từ %s (phiên %s)", user.getUsername(), client.getRemoteIp(), s.getId());
-                return Message.ok(req, "Đăng nhập thành công")
-                        .put("user", user)
-                        .put("token", s.getToken())
-                        .put("sessionId", s.getId())
-                        .put("idleTimeoutMinutes", (int) (sessions.getIdleTimeoutMs() / 60000));
+                return loginOk(req, client, user, "");
+            }
+
+            // ---------------- Đăng nhập bằng Google ----------------
+            case GOOGLE_CONFIG:
+                return Message.ok(req).put("enabled", google.isEnabled())
+                        .put("clientId", google.isEnabled() ? google.getConfig().getClientId() : null)
+                        .put("authUrl", google.getConfig().getAuthUrl());
+
+            case GOOGLE_LOGIN: {
+                GoogleIdentity id = google.exchange(req.getString("code"), req.getString("codeVerifier"),
+                        req.getString("redirectUri"));
+                UserInfo user = users.findByGoogle(id);
+                if (user != null) {
+                    return loginOk(req, client, user, " bằng Google (" + id.email + ")");
+                }
+                // Tài khoản Google chưa liên kết → client hỏi: tạo tài khoản mới hay liên kết tài khoản đã có
+                Log.info("Tài khoản Google %s chưa liên kết - chờ tạo mới / liên kết (từ %s)", id.email,
+                        client.getRemoteIp());
+                return Message.ok(req, "Tài khoản Google chưa liên kết")
+                        .put("needLink", true)
+                        .put("ticket", google.createTicket(id))
+                        .put("email", id.email)
+                        .put("name", id.name)
+                        .put("suggestedUsername", id.suggestedUsername());
+            }
+
+            case GOOGLE_COMPLETE: {
+                String ticket = req.getString("ticket");
+                GoogleIdentity id = google.peekTicket(ticket);
+                UserInfo user = "link".equals(req.getString("mode"))
+                        ? users.linkGoogle(id, req.getString("username"), req.getString("password"), client.getRemoteIp())
+                        : users.registerGoogle(id, req.getString("username"), req.getString("fullName"),
+                        req.getString("studentId"));
+                google.consumeTicket(ticket);
+                return loginOk(req, client, user, " bằng Google (" + id.email + ")");
             }
 
             case REGISTER: {
@@ -115,6 +148,17 @@ public class RequestHandler {
         }
     }
 
+    /** Tạo phiên đăng nhập và trả về thông tin cho client (dùng chung cho mật khẩu và Google). */
+    private Message loginOk(Message req, ClientHandler client, UserInfo user, String how) {
+        Session s = sessions.login(user, client);
+        Log.info("%s đăng nhập%s từ %s (phiên %s)", user.getUsername(), how, client.getRemoteIp(), s.getId());
+        return Message.ok(req, "Đăng nhập thành công")
+                .put("user", user)
+                .put("token", s.getToken())
+                .put("sessionId", s.getId())
+                .put("idleTimeoutMinutes", (int) (sessions.getIdleTimeoutMs() / 60000));
+    }
+
     private Message handleAuthenticated(Message req, Command cmd, Session session, UserInfo user) {
         switch (cmd) {
             case LOGOUT:
@@ -135,8 +179,10 @@ public class RequestHandler {
 
             case BOOK_SEAT: {
                 LocalDate date = req.get("date");
-                Booking b = bookings.book(user, req.getString("seatId"), date, req.getInt("slot", 0));
+                Booking b = bookings.book(user, req.getString("seatId"), date, req.getInt("slot", 0),
+                        req.getBool("onePlace"));
                 return Message.ok(req, "Đặt chỗ thành công! Mã đặt chỗ: " + b.getId()
+                        + (b.isSharedPlace() ? "\nBạn ngồi ghép bàn " + b.getSeatId() + ", vị trí #" + b.getPlace() + "." : "")
                         + "\nNhớ check-in trong khoảng 15 phút trước/sau giờ bắt đầu ca.").put("booking", b);
             }
 
@@ -237,9 +283,9 @@ public class RequestHandler {
                         req.getString("guestPhone"), req.getString("guestNote"))
                         : null;
                 Booking b = bookings.bookByAdmin(user, req.getString("seatId"), date, req.getInt("slot", 0), guest,
-                        req.getBool("checkInNow"));
+                        req.getBool("checkInNow"), req.getBool("onePlace"));
                 String who = b.isWalkIn() ? " cho " + b.getFullName() : "";
-                return Message.ok(req, "Đã đặt chỗ " + b.getSeatId() + who + ". Mã đặt chỗ: " + b.getId()
+                return Message.ok(req, "Đã đặt chỗ " + b.getSeatLabel() + who + ". Mã đặt chỗ: " + b.getId()
                         + (b.getStatus() == BookingStatus.CHECKED_IN ? " (đã check-in)" : "")).put("booking", b);
             }
 

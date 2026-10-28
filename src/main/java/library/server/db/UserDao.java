@@ -144,6 +144,35 @@ public final class UserDao {
         }
     }
 
+    /** Tài khoản đã liên kết với tài khoản Google có mã {@code sub}, hoặc null. */
+    public static UserRecord findByGoogleSub(Connection c, String sub) throws SQLException {
+        try (PreparedStatement ps = c.prepareStatement(
+                "SELECT username, full_name, student_id, role, salt, password_hash FROM users WHERE google_sub = ?")) {
+            ps.setString(1, sub);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (!rs.next()) {
+                    return null;
+                }
+                return new UserRecord(rs.getString(1), rs.getString(2), rs.getString(3),
+                        Role.valueOf(rs.getString(4)), rs.getString(5), rs.getString(6));
+            }
+        }
+    }
+
+    /** Mã Google đang liên kết với tài khoản (null nếu chưa liên kết). */
+    public static String googleSubOf(Connection c, String username) throws SQLException {
+        try (PreparedStatement ps = c.prepareStatement("SELECT google_sub FROM users WHERE username = ?")) {
+            ps.setString(1, username);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? rs.getString(1) : null;
+            }
+        }
+    }
+
+    public static void linkGoogle(Connection c, String username, String sub, String email) throws SQLException {
+        Sql.update(c, "UPDATE users SET google_sub = ?, email = ? WHERE username = ?", sub, email, username);
+    }
+
     public static boolean studentIdExists(Connection c, String studentId) throws SQLException {
         try (PreparedStatement ps = c.prepareStatement("SELECT 1 FROM users WHERE student_id = ?")) {
             ps.setString(1, studentId);

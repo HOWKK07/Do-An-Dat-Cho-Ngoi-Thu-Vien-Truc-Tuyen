@@ -22,11 +22,12 @@ import java.util.Map;
  * Cột {@code owner_live} = 1 chỉ với lượt sinh viên tự đặt còn hiệu lực (giới hạn 1 chỗ/ca cho mỗi sinh viên).
  */
 public final class BookingDao {
-    public static final String UQ_SEAT_LIVE = "uq_seat_live";
+    /** Mỗi vị trí trên một chỗ / bàn chỉ có 1 lượt còn hiệu lực trong ca (place 0 = cả bàn, 1, 2... = ngồi ghép). */
+    public static final String UQ_SEAT_LIVE = "uq_seat_place_live";
     public static final String UQ_USER_LIVE = "uq_owner_live";
 
     private static final String COLUMNS = "id, username, full_name, student_id, seat_id, zone_id, zone_name, "
-            + "booking_date, slot, status, created_at, checked_in_at, finished_at, note, walk_in, phone, guest_note";
+            + "booking_date, slot, status, created_at, checked_in_at, finished_at, note, walk_in, phone, guest_note, place";
     private static final String SELECT = "SELECT " + COLUMNS + " FROM bookings ";
 
     private BookingDao() {
@@ -63,6 +64,7 @@ public final class BookingDao {
         b.setWalkIn(rs.getBoolean("walk_in"));
         b.setPhone(rs.getString("phone"));
         b.setGuestNote(rs.getString("guest_note"));
+        b.setPlace(rs.getInt("place"));
         return b;
     }
 
@@ -95,6 +97,12 @@ public final class BookingDao {
     public static List<Booking> liveOfUserOnDate(Connection c, String username, LocalDate date) throws SQLException {
         return list(c, SELECT + "WHERE username = ? AND booking_date = ? AND live = 1 AND walk_in = FALSE",
                 username, date);
+    }
+
+    /** Các lượt còn hiệu lực trên một chỗ / bàn trong ca (cả bàn hoặc từng chỗ ngồi ghép). */
+    public static List<Booking> liveOfSeat(Connection c, String seatId, LocalDate date, int slot) throws SQLException {
+        return list(c, SELECT + "WHERE seat_id = ? AND booking_date = ? AND slot = ? AND live = 1 ORDER BY place",
+                seatId, date, slot);
     }
 
     public static boolean isSeatTaken(Connection c, String seatId, LocalDate date, int slot) throws SQLException {
@@ -147,12 +155,12 @@ public final class BookingDao {
     public static Booking insert(Connection c, Booking b, boolean limitOnePerSlot) throws SQLException {
         try (PreparedStatement ps = c.prepareStatement("INSERT INTO bookings (username, full_name, student_id, "
                         + "seat_id, zone_id, zone_name, booking_date, slot, status, live, owner_live, created_at, "
-                        + "checked_in_at, walk_in, phone, guest_note) VALUES (?,?,?,?,?,?,?,?,?,1,?,?,?,?,?,?)",
+                        + "checked_in_at, walk_in, phone, guest_note, place) VALUES (?,?,?,?,?,?,?,?,?,1,?,?,?,?,?,?,?)",
                 Statement.RETURN_GENERATED_KEYS)) {
             Sql.bind(ps, b.getUsername(), b.getFullName(), b.getStudentId(), b.getSeatId(), b.getZoneId(),
                     b.getZoneName(), b.getDate(), b.getSlot(), b.getStatus().name(),
                     limitOnePerSlot ? 1 : null, b.getCreatedAt(), b.getCheckedInAt(), b.isWalkIn(),
-                    b.getPhone(), b.getGuestNote());
+                    b.getPhone(), b.getGuestNote(), b.getPlace());
             ps.executeUpdate();
             try (ResultSet keys = ps.getGeneratedKeys()) {
                 keys.next();

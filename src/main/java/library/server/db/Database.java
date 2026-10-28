@@ -53,11 +53,19 @@ public class Database implements AutoCloseable {
             return Schema.migrate(c);
         });
         if (migrated) {
-            Log.info("Đã nâng cấp cấu trúc CSDL lên phiên bản mới (đặt chỗ tại quầy, điểm uy tín) - dữ liệu cũ giữ nguyên");
+            Log.info("Đã nâng cấp cấu trúc CSDL lên phiên bản mới (đặt chỗ tại quầy, điểm uy tín, ngồi ghép, đăng nhập Google) - dữ liệu cũ giữ nguyên");
         }
         int rows = tx(DataSeeder::seedIfEmpty);
         if (rows > 0) {
             Log.info("CSDL trống - đã thêm %d dòng dữ liệu mẫu (tài khoản, khu vực, chỗ ngồi, thông báo)", rows);
+        }
+        for (String update : tx(DataSeeder::applyDataUpdates)) {
+            Log.info("Cập nhật dữ liệu: %s", update);
+        }
+        int renamed = tx(DataSeeder::renameLegacyLibrary);
+        if (renamed > 0) {
+            Log.info("Đã đổi tên \"Thư viện Fix Bug\" thành \"%s\" trong dữ liệu cũ (%d dòng)",
+                    library.common.Protocol.LIBRARY_NAME, renamed);
         }
     }
 

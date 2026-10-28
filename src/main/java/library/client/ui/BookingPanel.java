@@ -126,6 +126,7 @@ public class BookingPanel extends JPanel {
         addLegend(legend, SeatButton.legendSwatch(SeatButton.BOOKED_FILL, SeatButton.BOOKED_LINE, false), "Đã có người đặt");
         addLegend(legend, SeatButton.legendSwatch(SeatButton.MINE_FILL, SeatButton.MINE_LINE, false), "Chỗ của bạn");
         addLegend(legend, SeatButton.legendSwatch(SeatButton.OFF_FILL, SeatButton.OFF_LINE, false), "Bảo trì");
+        addLegend(legend, SeatButton.legendSwatch(SeatButton.SHARE_FILL, SeatButton.SHARE_LINE, false), "Đặt lẻ / ngồi ghép");
         addLegend(legend, SeatButton.legendSwatch(null, null, true), "Có ổ cắm điện");
 
         JPanel infoRow = new JPanel(new BorderLayout());
@@ -261,7 +262,7 @@ public class BookingPanel extends JPanel {
             List<SeatView> seats = byZone.getOrDefault(z.getId(), new ArrayList<>());
             int zoneFree = 0;
             for (SeatView v : seats) {
-                if (v.getState() == SeatState.AVAILABLE) {
+                if (v.getState() == SeatState.AVAILABLE || v.getState() == SeatState.PARTIAL) {
                     zoneFree++;
                 }
             }
@@ -285,8 +286,10 @@ public class BookingPanel extends JPanel {
                 + " &nbsp;|&nbsp; Đã đặt <b>" + map.getMyBookingsThatDay() + "/" + map.getMaxBookingsPerDay()
                 + "</b> ca trong ngày")
                 + "</html>");
-        notice.setText(map.isOpen() ? "" : map.getClosedReason() + " Hãy chọn ngày hoặc ca khác.");
-        notice.setVisible(!map.isOpen());
+        // Đóng đặt chỗ → báo lý do; đang mở ngồi ghép → báo bàn nào đang cho đặt lẻ
+        notice.setText(!map.isOpen() ? map.getClosedReason() + " Hãy chọn ngày hoặc ca khác."
+                : map.getShareNote() != null ? map.getShareNote() : "");
+        notice.setVisible(!map.isOpen() || map.getShareNote() != null);
         mapPanel.revalidate();
         mapPanel.repaint();
     }
@@ -349,24 +352,47 @@ public class BookingPanel extends JPanel {
                     return;
                 }
                 if (ctx.isAdmin()) {
-                    Message req = AdminBookingDialog.show(this, s, place, map.getDate(), TimeSlot.of(map.getSlot()));
-                    if (req != null) {
-                        UiKit.call(this, ctx.conn(), req, r -> {
-                            Toast.show(this, r.getText(), UiKit.SUCCESS);
-                            requestRefresh();
-                        }, this::requestRefresh);
+                    adminBook(s, place, map, v.isShareOpen(), false);
+                    return;
+                }
+                if (v.isShareOpen()) { // bàn đang mở ngồi ghép: chọn đặt cả bàn hay chỉ 1 chỗ
+                    int pick = JOptionPane.showOptionDialog(this, "<html><b>" + UiKit.html(where) + "</b><br>"
+                                    + UiKit.html(when).replace("\n", "<br>") + "<br><br>Khu chỗ đơn đã kín nên bàn này "
+                                    + "đang mở cho <b>đặt lẻ từng chỗ</b> (ngồi ghép với người khác).<br>"
+                                    + "Bạn muốn đặt thế nào?</html>", "Đặt chỗ", JOptionPane.DEFAULT_OPTION,
+                            JOptionPane.QUESTION_MESSAGE, null, new Object[]{"Đặt 1 chỗ (ngồi ghép)",
+                                    "Đặt cả bàn (" + s.getCapacity() + " người)", "Hủy"}, "Đặt 1 chỗ (ngồi ghép)");
+                    if (pick == 0 || pick == 1) {
+                        sendBooking(s, map, pick == 0);
                     }
                     return;
                 }
                 if (UiKit.confirm(this, "Xác nhận đặt chỗ?\n\n" + where + "\n" + s.getType().getLabel() + " • "
                         + s.getCapacity() + " người" + (s.isHasOutlet() ? " • có ổ cắm điện" : "") + "\n" + when)) {
-                    UiKit.call(this, ctx.conn(), Message.request(Command.BOOK_SEAT)
-                                    .put("seatId", s.getId()).put("date", map.getDate()).put("slot", map.getSlot()),
-                            r -> {
-                                Toast.show(this, r.getText(), UiKit.SUCCESS);
-                                requestRefresh();
-                            },
-                            this::requestRefresh);
+                    sendBooking(s, map, false);
+                }
+                break;
+
+            case PARTIAL: // bàn đang có người ngồi ghép, còn chỗ
+                if (!map.isOpen()) {
+                    UiKit.info(this, map.getClosedReason());
+                    return;
+                }
+                if (ctx.isAdmin()) {
+                    int a = JOptionPane.showOptionDialog(this, where + "\n" + when + "\nĐang ngồi ghép "
+                                    + v.getSharedTaken() + "/" + s.getCapacity() + ":\n" + listHolders(v.getBookedBy())
+                                    + "\n\nCheck-in / hủy từng lượt ở tab \"QT: Quản lý đặt chỗ\".",
+                            "Bàn ngồi ghép", JOptionPane.DEFAULT_OPTION, JOptionPane.INFORMATION_MESSAGE, null,
+                            new Object[]{"Đặt 1 chỗ ghép", "Đóng"}, "Đóng");
+                    if (a == 0) {
+                        adminBook(s, place, map, true, true);
+                    }
+                    return;
+                }
+                if (UiKit.confirm(this, "Đặt 1 chỗ ngồi ghép?\n\n" + where + "\n" + when + "\nBàn đang có "
+                        + v.getSharedTaken() + "/" + s.getCapacity() + " người ngồi ghép, còn " + v.getFreePlaces()
+                        + " chỗ.")) {
+                    sendBooking(s, map, true);
                 }
                 break;
 
@@ -377,7 +403,8 @@ public class BookingPanel extends JPanel {
                     return;
                 }
                 int choice = JOptionPane.showOptionDialog(this,
-                        "Bạn đã đặt chỗ " + place + "\n" + when + "\nMã đặt chỗ: " + v.getBookingId(),
+                        "Bạn đã đặt chỗ " + place + (v.getMyPlace() > 0 ? " (ngồi ghép, vị trí #" + v.getMyPlace() + ")" : "")
+                                + "\n" + when + "\nMã đặt chỗ: " + v.getBookingId(),
                         "Chỗ của bạn", JOptionPane.DEFAULT_OPTION, JOptionPane.INFORMATION_MESSAGE, null,
                         new Object[]{"Hủy lượt đặt", "Đóng"}, "Đóng");
                 if (choice == 0 && UiKit.confirm(this, "Hủy lượt đặt " + v.getBookingId() + "?")) {
@@ -422,8 +449,12 @@ public class BookingPanel extends JPanel {
                             });
                         }
                     }
+                } else if (ctx.isAdmin() && v.getBookedBy() != null) { // bàn ngồi ghép đã đủ người
+                    UiKit.info(this, where + "\n" + when + "\nĐã đủ " + s.getCapacity() + " người ngồi ghép:\n"
+                            + listHolders(v.getBookedBy()) + "\n\nCheck-in / hủy từng lượt ở tab \"QT: Quản lý đặt chỗ\".");
                 } else {
-                    UiKit.info(this, where + " đã có người đặt trong ca này.\nVui lòng chọn chỗ màu xanh lá.");
+                    UiKit.info(this, where + " đã có người đặt trong ca này.\nVui lòng chọn chỗ màu xanh lá"
+                            + (map.getShareNote() != null ? " hoặc bàn màu vàng (đặt lẻ)." : "."));
                 }
                 break;
 
@@ -435,5 +466,31 @@ public class BookingPanel extends JPanel {
             default:
                 break;
         }
+    }
+
+    private void sendBooking(Seat s, SeatMap map, boolean onePlace) {
+        UiKit.call(this, ctx.conn(), Message.request(Command.BOOK_SEAT).put("seatId", s.getId())
+                        .put("date", map.getDate()).put("slot", map.getSlot()).put("onePlace", onePlace),
+                r -> {
+                    Toast.show(this, r.getText(), UiKit.SUCCESS);
+                    requestRefresh();
+                },
+                this::requestRefresh);
+    }
+
+    private void adminBook(Seat s, String place, SeatMap map, boolean shareOpen, boolean placeOnly) {
+        Message req = AdminBookingDialog.show(this, s, place, map.getDate(), TimeSlot.of(map.getSlot()),
+                shareOpen, placeOnly);
+        if (req != null) {
+            UiKit.call(this, ctx.conn(), req, r -> {
+                Toast.show(this, r.getText(), UiKit.SUCCESS);
+                requestRefresh();
+            }, this::requestRefresh);
+        }
+    }
+
+    /** "#1 A; #2 B" → mỗi người một dòng. */
+    private static String listHolders(String holders) {
+        return holders == null ? "" : "  " + holders.replace("; ", "\n  ");
     }
 }

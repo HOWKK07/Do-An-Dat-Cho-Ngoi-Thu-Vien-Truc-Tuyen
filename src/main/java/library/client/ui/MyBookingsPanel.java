@@ -32,7 +32,7 @@ public class MyBookingsPanel extends JPanel {
             .col("Mã đặt chỗ", Booking::getId)
             .col("Ngày", LocalDate.class, Booking::getDate)
             .col("Ca học", b -> b.getTimeSlot() != null ? b.getTimeSlot().getLabel() : "")
-            .col("Chỗ", Booking::getSeatId)
+            .col("Chỗ", Booking::getSeatLabel)
             .col("Khu vực", Booking::getZoneName)
             .col("Trạng thái", BookingStatus.class, Booking::getStatus)
             .col("Đặt lúc", LocalDateTime.class, Booking::getCreatedAt)

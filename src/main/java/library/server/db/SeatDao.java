@@ -36,6 +36,19 @@ public final class SeatDao {
         return list;
     }
 
+    /**
+     * Đọc và KHÓA dòng chỗ ngồi tới hết transaction: các lượt đặt vào cùng một chỗ / bàn được xử lý lần lượt
+     * (cần cho ngồi ghép: tránh vừa đặt cả bàn vừa đặt lẻ cùng lúc).
+     */
+    public static Seat findForUpdate(Connection c, String id) throws SQLException {
+        try (PreparedStatement ps = c.prepareStatement("SELECT " + COLUMNS + " FROM seats WHERE id = ? FOR UPDATE")) {
+            ps.setString(1, id);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? map(rs) : null;
+            }
+        }
+    }
+
     public static Seat find(Connection c, String id) throws SQLException {
         try (PreparedStatement ps = c.prepareStatement("SELECT " + COLUMNS + " FROM seats WHERE id = ?")) {
             ps.setString(1, id);

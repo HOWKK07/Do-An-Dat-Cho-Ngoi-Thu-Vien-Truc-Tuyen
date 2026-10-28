@@ -8,3 +8,5 @@ nbproject/private/
 
 # Cấu hình MySQL riêng của từng máy (server tự tạo lại file mẫu nếu thiếu)
 db.properties
+# Khóa bí mật đăng nhập Google của server
+google.properties

@@ -3,6 +3,8 @@ package library.server;
 import library.common.EventType;
 import library.common.Fmt;
 import library.common.Message;
+import library.server.auth.GoogleAuthService;
+import library.server.auth.GoogleConfig;
 import library.server.db.Database;
 import library.server.db.DbConfig;
 import library.server.db.DbException;
@@ -44,6 +46,7 @@ public class LibraryServer {
     private final BookingService bookings;
     private final ContentService content;
     private final ReputationService reputation;
+    private final GoogleAuthService google;
     private final SessionManager sessions;
     private final RequestHandler requestHandler;
     private final AtomicLong connectionSeq = new AtomicLong();
@@ -63,6 +66,7 @@ public class LibraryServer {
         this.bookings = new BookingService(database, events);
         this.content = new ContentService(database, events, bookings);
         this.reputation = new ReputationService(database, events);
+        this.google = new GoogleAuthService(loadGoogleConfig(config));
         this.sessions = new SessionManager(config.getSessionTimeoutMinutes() * 60_000L,
                 config.getReconnectGraceSeconds() * 1000L, pools.getEventExecutor());
         this.requestHandler = new RequestHandler(this);
@@ -107,6 +111,16 @@ public class LibraryServer {
         }
         Log.info("Tối đa %d client, phiên hết hạn sau %d phút không thao tác", config.getMaxClients(),
                 config.getSessionTimeoutMinutes());
+        GoogleConfig g = google.getConfig();
+        if (g.isEnabled()) {
+            Log.info("Đăng nhập bằng Google: ĐÃ BẬT (Client ID %s...%s)%s",
+                    g.getClientId().substring(0, Math.min(8, g.getClientId().length())),
+                    g.getClientId().contains(".apps.") ? ".apps.googleusercontent.com" : "",
+                    g.getAllowedDomain().isEmpty() ? "" : ", chỉ email @" + g.getAllowedDomain());
+        } else {
+            Log.info("Đăng nhập bằng Google: chưa bật - điền Client ID / Client secret vào %s rồi chạy lại server",
+                    g.getSource() != null ? g.getSource() : GoogleConfig.DEFAULT_FILE);
+        }
     }
 
     private void acceptLoop() {
@@ -232,6 +246,20 @@ public class LibraryServer {
 
     public UserService getUsers() {
         return users;
+    }
+
+    public GoogleAuthService getGoogle() {
+        return google;
+    }
+
+    /** google.properties nằm cùng thư mục với db.properties. */
+    private static GoogleConfig loadGoogleConfig(ServerConfig config) {
+        try {
+            return GoogleConfig.load(config.getDbConfigFile().toAbsolutePath().resolveSibling(GoogleConfig.DEFAULT_FILE));
+        } catch (IOException e) {
+            Log.warn("Không đọc được cấu hình đăng nhập Google: %s", e.getMessage());
+            return GoogleConfig.disabled();
+        }
     }
 
     public ContentService getContent() {

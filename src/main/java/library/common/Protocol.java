@@ -11,10 +11,14 @@ import java.io.ObjectInputStream;
  */
 public final class Protocol {
 
-    /** Tên nhóm thực hiện đề tài - dùng làm tên thư viện trên giao diện. */
+    /** Tên nhóm thực hiện đề tài (dòng "Nhóm ..." ở màn hình đăng nhập, file SQL). */
     public static final String GROUP_NAME = "Fix Bug";
-    public static final String LIBRARY_NAME = "Thư viện " + GROUP_NAME;
+    /** Tên hiệu của thư viện trên giao diện. */
+    public static final String BRAND = "Fixbug";
+    public static final String LIBRARY_NAME = "Thư viện " + BRAND;
     public static final String APP_NAME = LIBRARY_NAME + " - Đặt chỗ học trực tuyến";
+    /** Tên server mặc định (hiện khi client tìm server trong LAN, nhật ký, cửa sổ máy chủ); đổi bằng --name. */
+    public static final String SERVER_NAME = BRAND;
     public static final String VERSION = "1.0";
 
     /** Cổng TCP mặc định của server. */

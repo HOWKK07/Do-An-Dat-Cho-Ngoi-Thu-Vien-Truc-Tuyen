@@ -32,6 +32,9 @@ public class SeatButton extends JComponent {
     static final Color MINE_LINE = new Color(0x2F6FED);
     static final Color OFF_FILL = new Color(0xECEDEF);
     static final Color OFF_LINE = new Color(0x9CA3AF);
+    /** Bàn mở cho đặt lẻ từng chỗ / còn chỗ ngồi ghép. */
+    static final Color SHARE_FILL = new Color(0xFFF1D0);
+    static final Color SHARE_LINE = new Color(0xB7791F);
     static final Color OUTLET = new Color(0xE0A100);
 
     private final SeatView view;
@@ -69,6 +72,9 @@ public class SeatButton extends JComponent {
         StringBuilder sb = new StringBuilder("<html><b>").append(s.getId()).append("</b> — ")
                 .append(UiKit.html(zoneName)).append("<br>")
                 .append(s.getType().getLabel()).append(" • ").append(s.getCapacity()).append(" người")
+                .append(view.getSharedTaken() > 0 ? "<br>Ngồi ghép: " + view.getSharedTaken() + "/" + s.getCapacity()
+                        + " chỗ đã có người" : "")
+                .append(view.isShareOpen() ? "<br><b>Đang mở cho đặt lẻ từng chỗ</b> (khu chỗ đơn đã kín)" : "")
                 .append("<br>Ổ cắm điện: ").append(s.isHasOutlet() ? "có" : "không")
                 .append("<br>Trạng thái: <b>").append(stateText()).append("</b>");
         if (bookedBy != null) {
@@ -81,6 +87,9 @@ public class SeatButton extends JComponent {
     }
 
     private String stateText() {
+        if (view.getState() == SeatState.AVAILABLE && view.isShareOpen()) {
+            return "Còn trống - đặt cả bàn hoặc đặt lẻ 1 chỗ";
+        }
         if (view.getState() == SeatState.MINE && view.getBookingStatus() == BookingStatus.CHECKED_IN) {
             return "Bạn đang sử dụng";
         }
@@ -113,7 +122,16 @@ public class SeatButton extends JComponent {
                 fill = OFF_FILL;
                 line = OFF_LINE;
                 break;
+            case PARTIAL:
+                fill = SHARE_FILL;
+                line = SHARE_LINE;
+                break;
             default:
+                if (view.isShareOpen()) {
+                    fill = SHARE_FILL;
+                    line = SHARE_LINE;
+                    break;
+                }
                 fill = AVAILABLE_FILL;
                 line = AVAILABLE_LINE;
         }
@@ -157,11 +175,18 @@ public class SeatButton extends JComponent {
         if (view.getState() == SeatState.MAINTENANCE) {
             return "Bảo trì";
         }
+        if (view.getState() == SeatState.MINE) {
+            String place = view.getMyPlace() > 0 ? " · ghép #" + view.getMyPlace() : "";
+            return (view.getBookingStatus() == BookingStatus.CHECKED_IN ? "Đang dùng" : "Của bạn") + place;
+        }
+        if (view.getSharedTaken() > 0) {
+            return "Ghép " + view.getSharedTaken() + "/" + s.getCapacity() + " người";
+        }
         if (view.getBookingStatus() == BookingStatus.CHECKED_IN) {
             return "Đang dùng";
         }
-        if (view.getState() == SeatState.MINE) {
-            return "Của bạn";
+        if (view.getState() == SeatState.AVAILABLE && view.isShareOpen()) {
+            return "Đặt lẻ · 0/" + s.getCapacity();
         }
         return s.getCapacity() > 1 ? s.getType().getShortLabel() + " · " + s.getCapacity() + " người"
                 : s.getType().getShortLabel();

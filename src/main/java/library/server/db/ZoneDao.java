@@ -22,7 +22,7 @@ public final class ZoneDao {
 
     public static List<Zone> list(Connection c) throws SQLException {
         List<Zone> list = new ArrayList<>();
-        try (PreparedStatement ps = c.prepareStatement("SELECT " + COLUMNS + " FROM zones ORDER BY id");
+        try (PreparedStatement ps = c.prepareStatement("SELECT " + COLUMNS + " FROM zones ORDER BY floor, id");
              ResultSet rs = ps.executeQuery()) {
             while (rs.next()) {
                 list.add(map(rs));
