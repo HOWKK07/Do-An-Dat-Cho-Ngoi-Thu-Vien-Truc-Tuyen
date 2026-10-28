@@ -35,7 +35,11 @@ public class EventBroadcaster {
     }
 
     public void sendToUser(String username, EventType type, String text) {
-        Message event = Message.event(type, text);
+        sendToUser(username, Message.event(type, text));
+    }
+
+    /** Gửi một sự kiện (có thể kèm dữ liệu, VD "bookingId") tới mọi phiên của một người dùng. */
+    public void sendToUser(String username, Message event) {
         submit(() -> {
             for (ClientHandler c : clients) {
                 Session s = c.getSession();

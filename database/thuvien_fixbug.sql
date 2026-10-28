@@ -93,6 +93,19 @@ CREATE TABLE IF NOT EXISTS announcements (
   created_at DATETIME     NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+CREATE TABLE IF NOT EXISTS booking_companions (
+  booking_id   INT          NOT NULL,
+  username     VARCHAR(20)  NOT NULL,
+  status       VARCHAR(10)  NOT NULL DEFAULT 'PENDING',
+  responded_at DATETIME     NULL,
+  invited_at   DATETIME     NULL,
+  reminded     BOOLEAN      NOT NULL DEFAULT FALSE,
+  PRIMARY KEY (booking_id, username),
+  KEY idx_companion_user (username),
+  CONSTRAINT fk_companion_booking FOREIGN KEY (booking_id) REFERENCES bookings(id) ON DELETE CASCADE,
+  CONSTRAINT fk_companion_user FOREIGN KEY (username) REFERENCES users(username)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 CREATE TABLE IF NOT EXISTS app_meta (
   meta_key   VARCHAR(50)  NOT NULL PRIMARY KEY,
   meta_value VARCHAR(200) NULL,

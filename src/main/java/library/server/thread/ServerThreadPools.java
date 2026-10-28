@@ -78,6 +78,14 @@ public class ServerThreadPools {
     }
 
     /**
+     * Chạy {@code task} MỘT LẦN sau {@code delayMs} (VD nhắc người đặt sau 30 phút). Chỉ là một mục trong hàng đợi của
+     * luồng scheduler - không tạo luồng mới, không tốn CPU trong lúc chờ.
+     */
+    public void scheduleOnce(String name, Runnable task, long delayMs) {
+        submit(safe(name, task), Math.max(0, delayMs));
+    }
+
+    /**
      * LẬP LỊCH THEO MỐC THỜI GIAN (thay cho quét định kỳ): chạy {@code task} một lần ngay (bù phần việc trong lúc
      * server tắt), sau đó luồng scheduler "ngủ" tới mốc kế tiếp do {@code nextRun} tính ra rồi mới chạy lại.
      * Giữa hai mốc không tốn CPU hay truy vấn CSDL nào, và không cần luồng / bộ hẹn giờ riêng cho từng lượt đặt.

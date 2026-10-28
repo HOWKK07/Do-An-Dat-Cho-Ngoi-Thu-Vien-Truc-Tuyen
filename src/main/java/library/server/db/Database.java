@@ -53,7 +53,7 @@ public class Database implements AutoCloseable {
             return Schema.migrate(c);
         });
         if (migrated) {
-            Log.info("Đã nâng cấp cấu trúc CSDL lên phiên bản mới (đặt chỗ tại quầy, điểm uy tín, ngồi ghép, đăng nhập Google) - dữ liệu cũ giữ nguyên");
+            Log.info("Đã nâng cấp cấu trúc CSDL lên phiên bản mới (đặt chỗ tại quầy, điểm uy tín, ngồi ghép, đăng nhập Google, xác nhận người đi cùng) - dữ liệu cũ giữ nguyên");
         }
         int rows = tx(DataSeeder::seedIfEmpty);
         if (rows > 0) {

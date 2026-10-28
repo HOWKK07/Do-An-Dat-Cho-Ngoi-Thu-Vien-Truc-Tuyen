@@ -74,7 +74,8 @@ public final class StressTest {
                 .put("date", date).put("slot", slot)).get("map");
         String seatId = null;
         for (SeatView v : map.getSeats()) {
-            if (v.getState() == SeatState.AVAILABLE) {
+            // Chỉ thử với chỗ đơn: đặt cả bàn nhiều chỗ còn phải khai báo người đi cùng
+            if (v.getState() == SeatState.AVAILABLE && v.getSeat().getCapacity() <= 1) {
                 seatId = v.getSeat().getId();
                 break;
             }

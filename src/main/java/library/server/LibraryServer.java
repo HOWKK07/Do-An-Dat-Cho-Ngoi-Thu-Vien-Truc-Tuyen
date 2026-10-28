@@ -64,6 +64,8 @@ public class LibraryServer {
         this.events = new EventBroadcaster(clients, pools.getEventExecutor());
         this.users = new UserService(database);
         this.bookings = new BookingService(database, events);
+        // Đặt cả bàn chưa đủ người xác nhận: nhắc sau 15 phút, tự hủy sau 30 phút - mỗi mốc là một mục hẹn giờ chạy 1 lần
+        bookings.setDelayedRunner((task, delayMs) -> pools.scheduleOnce("kiểm tra xác nhận người đi cùng", task, delayMs));
         this.content = new ContentService(database, events, bookings);
         this.reputation = new ReputationService(database, events);
         this.google = new GoogleAuthService(loadGoogleConfig(config));
@@ -104,6 +106,10 @@ public class LibraryServer {
         // Khóa đặt chỗ tính theo ngày → chỉ cần mở khóa 1 lần ngay sau 0 giờ
         pools.scheduleAtMilestones("mở khóa đặt chỗ hết hạn (điểm uy tín)", reputation::releaseExpiredLocks,
                 now -> now.toLocalDate().plusDays(1).atTime(0, 0, 5));
+        int waiting = bookings.scheduleCompanionChecks();
+        if (waiting > 0) {
+            Log.info("Hẹn giờ nhắc / tự hủy cho %d lượt đặt cả bàn chưa đủ người xác nhận đi cùng", waiting);
+        }
 
         Log.info("Server '%s' đang chạy tại cổng TCP %d", config.getServerName(), config.getPort());
         for (String ip : getLanAddresses()) {

@@ -6,7 +6,10 @@ import java.time.LocalDate;
  * Quy tắc ĐIỂM UY TÍN - hạn chế sinh viên đặt chỗ rồi không đến.
  * <ul>
  *   <li>Mỗi tài khoản sinh viên bắt đầu với 80 điểm (tối đa 100).</li>
- *   <li>Không check-in (không đến): −20. Hủy sát giờ (dưới 60 phút trước ca): −5. Check-in đúng hẹn: +5.</li>
+ *   <li>Không check-in (không đến): −20; đặt CẢ bàn nhiều chỗ mà không đến: thêm −5 cho mỗi chỗ thêm, tối đa −40
+ *       (bàn đôi −25, bàn 4 người −35, bàn 6 người / phòng 8 người −40).
+ *       Người đi cùng đã xác nhận "Đồng ý" mà cả nhóm không đến: −10 mỗi người.
+ *       Hủy sát giờ (dưới 60 phút trước ca): −5. Check-in đúng hẹn: +5.</li>
  *   <li>100: Xuất sắc - 3 ca/ngày, đặt trước 3 ngày (tối đa của thư viện).</li>
  *   <li>80-99: Tốt - 3 ca/ngày, đặt trước 2 ngày.</li>
  *   <li>50-79: Hạn chế - 1 ca/ngày, đặt trước 2 ngày.</li>
@@ -18,6 +21,12 @@ public final class Reputation {
     public static final int START = 80;
     public static final int MAX = 100;
     public static final int NO_SHOW_PENALTY = 20;
+    /** Đặt CẢ bàn nhiều chỗ mà không đến: trừ thêm cho mỗi chỗ bị bỏ trống... */
+    public static final int NO_SHOW_EXTRA_PER_SEAT = 5;
+    /** ...nhưng một lần không đến bị trừ tối đa từng này điểm. */
+    public static final int NO_SHOW_MAX_PENALTY = 40;
+    /** Người đi cùng đã bấm "Đồng ý" nhưng cả nhóm không đến (không check-in) - mỗi người bị trừ từng này điểm. */
+    public static final int COMPANION_NO_SHOW_PENALTY = 10;
     public static final int LATE_CANCEL_PENALTY = 5;
     public static final int LATE_CANCEL_MINUTES = 60;
     public static final int CHECK_IN_REWARD = 5;
@@ -81,6 +90,17 @@ public final class Reputation {
         return score >= LOCK_BELOW ? Level.RESTRICTED : Level.LOCKED;
     }
 
+    /**
+     * Số điểm bị trừ khi đặt mà không đến: chỗ đơn hoặc 1 chỗ ngồi ghép → 20; đặt cả bàn {@code capacity} người
+     * → 20 + 5 × (capacity − 1), tối đa 40 - giữ cả bàn rồi bỏ trống làm nhiều người khác mất chỗ hơn.
+     */
+    public static int noShowPenalty(int capacity, boolean wholeTable) {
+        if (!wholeTable || capacity <= 1) {
+            return NO_SHOW_PENALTY;
+        }
+        return Math.min(NO_SHOW_MAX_PENALTY, NO_SHOW_PENALTY + NO_SHOW_EXTRA_PER_SEAT * (capacity - 1));
+    }
+
     /** Gợi ý để lên mức tiếp theo (null nếu đã ở mức cao nhất). */
     public static String nextLevelHint(Level level) {
         switch (level) {
@@ -99,6 +119,11 @@ public final class Reputation {
     public static String rulesHtml() {
         return "<html><b>Quy tắc điểm uy tín</b> (tài khoản mới " + START + " điểm, tối đa " + MAX + ")<br>"
                 + "• Đặt chỗ nhưng không đến / không check-in: <b>−" + NO_SHOW_PENALTY + "</b><br>"
+                + "&nbsp;&nbsp;&nbsp;Đặt cả bàn nhiều chỗ: thêm <b>−" + NO_SHOW_EXTRA_PER_SEAT + "</b>/chỗ, tối đa <b>−"
+                + NO_SHOW_MAX_PENALTY + "</b> (bàn đôi −" + noShowPenalty(2, true) + ", bàn 4 người −"
+                + noShowPenalty(4, true) + ")<br>"
+                + "• Đã xác nhận đi cùng một bàn mà cả nhóm không đến: <b>−" + COMPANION_NO_SHOW_PENALTY
+                + "</b> mỗi người<br>"
                 + "• Hủy lượt đặt dưới " + LATE_CANCEL_MINUTES + " phút trước giờ bắt đầu ca: <b>−" + LATE_CANCEL_PENALTY + "</b><br>"
                 + "• Check-in đúng hẹn: <b>+" + CHECK_IN_REWARD + "</b><br><br>"
                 + "<b>" + EXCELLENT_MIN + " (Xuất sắc):</b> tối đa " + Level.EXCELLENT.maxPerDay + " ca/ngày, đặt trước "

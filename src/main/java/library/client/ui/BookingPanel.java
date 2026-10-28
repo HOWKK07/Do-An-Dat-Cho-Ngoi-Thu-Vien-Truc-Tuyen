@@ -5,6 +5,7 @@ import library.common.Command;
 import library.common.Fmt;
 import library.common.Message;
 import library.common.Protocol;
+import library.common.Reputation;
 import library.common.Seat;
 import library.common.SeatMap;
 import library.common.SeatState;
@@ -25,6 +26,7 @@ import javax.swing.JList;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
+import javax.swing.SwingUtilities;
 import javax.swing.Timer;
 import java.awt.BorderLayout;
 import java.awt.Component;
@@ -359,16 +361,26 @@ public class BookingPanel extends JPanel {
                     int pick = JOptionPane.showOptionDialog(this, "<html><b>" + UiKit.html(where) + "</b><br>"
                                     + UiKit.html(when).replace("\n", "<br>") + "<br><br>Khu chỗ đơn đã kín nên bàn này "
                                     + "đang mở cho <b>đặt lẻ từng chỗ</b> (ngồi ghép với người khác).<br>"
+                                    + "Đặt cả bàn mà không đến sẽ bị trừ <b>"
+                                    + Reputation.noShowPenalty(s.getCapacity(), true) + "</b> điểm uy tín (đặt 1 chỗ: "
+                                    + Reputation.NO_SHOW_PENALTY + ").<br>"
                                     + "Bạn muốn đặt thế nào?</html>", "Đặt chỗ", JOptionPane.DEFAULT_OPTION,
                             JOptionPane.QUESTION_MESSAGE, null, new Object[]{"Đặt 1 chỗ (ngồi ghép)",
                                     "Đặt cả bàn (" + s.getCapacity() + " người)", "Hủy"}, "Đặt 1 chỗ (ngồi ghép)");
-                    if (pick == 0 || pick == 1) {
-                        sendBooking(s, map, pick == 0);
+                    if (pick == 0) {
+                        sendBooking(s, map, true);
+                    } else if (pick == 1) {
+                        askCompanionsAndBook(s, map, where, when);
                     }
                     return;
                 }
+                if (s.getCapacity() >= 2) { // đặt cả bàn nhiều chỗ: phải khai báo người đi cùng
+                    askCompanionsAndBook(s, map, where, when);
+                    return;
+                }
                 if (UiKit.confirm(this, "Xác nhận đặt chỗ?\n\n" + where + "\n" + s.getType().getLabel() + " • "
-                        + s.getCapacity() + " người" + (s.isHasOutlet() ? " • có ổ cắm điện" : "") + "\n" + when)) {
+                        + s.getCapacity() + " người" + (s.isHasOutlet() ? " • có ổ cắm điện" : "") + "\n" + when
+                        + wholeTableWarning(s))) {
                     sendBooking(s, map, false);
                 }
                 break;
@@ -466,6 +478,32 @@ public class BookingPanel extends JPanel {
             default:
                 break;
         }
+    }
+
+    /** Nhắc mức trừ điểm cao hơn khi giữ cả bàn nhiều chỗ (chỉ với sinh viên). */
+    private String wholeTableWarning(Seat s) {
+        if (ctx.isAdmin() || s.getCapacity() <= 1) {
+            return "";
+        }
+        return "\n\nLưu ý: đặt cả bàn " + s.getCapacity() + " người mà không đến check-in sẽ bị trừ "
+                + Reputation.noShowPenalty(s.getCapacity(), true) + " điểm uy tín (chỗ đơn: "
+                + Reputation.NO_SHOW_PENALTY + ").";
+    }
+
+    /**
+     * Đặt CẢ bàn nhiều chỗ: hỏi người đi cùng (mã số sinh viên hoặc tên đăng nhập). Tối thiểu
+     * {@link Protocol#minPeopleForTable} người kể cả người đặt. Server báo lỗi (sai MSSV, người đó đã có chỗ...)
+     * thì hỏi lại, giữ nguyên những gì đã nhập.
+     */
+    private void askCompanionsAndBook(Seat s, SeatMap map, String where, String when) {
+        CompanionDialog.askAndSend(this, ctx, "Đặt cả bàn " + s.getId() + " - khai báo người đi cùng",
+                "<b>" + UiKit.html(where) + "</b><br>" + UiKit.html(when), s.getCapacity(), null, "",
+                ids -> Message.request(Command.BOOK_SEAT).put("seatId", s.getId()).put("date", map.getDate())
+                        .put("slot", map.getSlot()).put("onePlace", false).put("companions", ids),
+                resp -> {
+                    Toast.show(this, resp.getText(), UiKit.SUCCESS);
+                    requestRefresh();
+                }, this::requestRefresh);
     }
 
     private void sendBooking(Seat s, SeatMap map, boolean onePlace) {
